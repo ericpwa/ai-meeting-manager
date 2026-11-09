@@ -1,0 +1,22 @@
+# 環境變數與機敏資訊 (資安鐵律：嚴禁入庫)
+.env
+.env.*
+!.env.example
+.streamlit/secrets.toml
+
+# Python 虛擬環境與快取
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.coverage
+htmlcov/
+
+# 本地備援資料庫與暫存檔
+data/*.db
+data/*.db-journal
+*.sqlite
+*.sqlite3
+.DS_Store
