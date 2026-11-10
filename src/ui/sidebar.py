@@ -5,12 +5,14 @@ from __future__ import annotations
 import streamlit as st
 
 from src.config import (
+    SUPPORTED_GEMINI_MODELS,
     get_gemini_api_key,
     get_gemini_model,
     get_supabase_credentials,
     get_webhook_url,
     get_workspace_passcode,
     is_supabase_configured,
+    is_valid_gemini_key_format,
     mask_secret,
 )
 from src.repositories.meeting_repo import MeetingRepository
@@ -52,7 +54,12 @@ def render_sidebar(repo: MeetingRepository) -> bool:
         st.markdown("### 🔑 資安與 BYOK 金鑰中心")
         current_gemini_key = get_gemini_api_key()
         if current_gemini_key:
-            st.success(f"Gemini API Key 已就緒 (`{mask_secret(current_gemini_key)}`)")
+            if is_valid_gemini_key_format(current_gemini_key):
+                st.success(f"Gemini API Key 已就緒 (`{mask_secret(current_gemini_key)}`)")
+            else:
+                st.warning(
+                    f"⚠️ 偵測到非標準格式金鑰 (`{mask_secret(current_gemini_key)}`)。Google AI Studio 金鑰應以 `AIza` 開頭，系統將自動啟用本地規則備援以確保零中斷。"
+                )
         else:
             st.info("尚未於 `.env` / `st.secrets` 偵測到 Gemini Key，可於下方動態注入 (BYOK) 或使用本地規則引擎體驗。")
 
@@ -66,11 +73,13 @@ def render_sidebar(repo: MeetingRepository) -> bool:
         if byok_gemini.strip():
             st.session_state["byok_gemini_api_key"] = byok_gemini.strip()
 
+        active_model = get_gemini_model()
+        default_model_idx = SUPPORTED_GEMINI_MODELS.index(active_model) if active_model in SUPPORTED_GEMINI_MODELS else 0
         model_choice = st.selectbox(
-            "🤖 Gemini 模型選擇",
-            options=["gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash"],
-            index=0,
-            help="預設採用免費額度與速度最佳之 gemini-2.5-flash，支援多模態音訊與 Structured Outputs。",
+            "🤖 Gemini 模型選擇 (內建多版本自動降級備援)",
+            options=SUPPORTED_GEMINI_MODELS,
+            index=default_model_idx,
+            help="預設採用免費額度與速度最佳之 gemini-2.5-flash，若單一模型忙碌將自動依序切換至可用模型版本。",
         )
         st.session_state["byok_gemini_model"] = model_choice
 

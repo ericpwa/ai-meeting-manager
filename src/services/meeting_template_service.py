@@ -446,8 +446,10 @@ def try_parse_structured_template_text(text: str) -> MeetingExtractionSchema | N
             meta["attendees"] = _split_list_str(re.split(r"[：:]", plain_ln, maxsplit=1)[1])
         elif plain_ln.startswith(("高階執行摘要：", "高階執行摘要:")):
             meta["executive_summary"] = re.split(r"[：:]", plain_ln, maxsplit=1)[1].strip()
-        elif any( plain_ln.startswith(p) for p in ("決議一", "決議二", "決議三", "決議：") ):
-            meta["key_decisions"].append(plain_ln)
+        elif any(plain_ln.startswith(p) for p in ("決議一", "決議二", "決議三", "決議：", "決議:")):
+            dec_clean = re.sub(r"^決議[：:]\s*", "", plain_ln).strip()
+            if dec_clean and dec_clean not in meta["key_decisions"]:
+                meta["key_decisions"].append(dec_clean)
 
     # Case 1: 檢查是否包含 Markdown 公版表格
     table_lines = [ln for ln in lines if ln.startswith("|") and ln.endswith("|")]
@@ -498,8 +500,11 @@ def schema_to_readable_transcript(schema: MeetingExtractionSchema) -> str:
         f"參與部門：{', '.join(schema.departments)}",
         f"出席人員：{', '.join(schema.attendees)}",
         f"高階執行摘要：{schema.executive_summary}",
-        "",
+        "關鍵決策：",
     ]
+    for dec in schema.key_decisions:
+        lines.append(f"- 決議：{dec}")
+    lines.append("")
     for idx, act in enumerate(schema.action_items, start=1):
         lines.extend(
             [

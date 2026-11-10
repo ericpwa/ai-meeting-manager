@@ -5,7 +5,13 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from src.config import PROJECT_ROOT, mask_secret
+from src.config import (
+    PROJECT_ROOT,
+    SUPPORTED_GEMINI_MODELS,
+    get_candidate_gemini_models,
+    is_valid_gemini_key_format,
+    mask_secret,
+)
 from src.schemas.models import ActionItem, QCDTModel, RACIModel
 from src.services.ai_service import (
     audit_action_evidence,
@@ -83,3 +89,21 @@ def test_zero_hardcoded_api_keys_security_scan() -> None:
 
     assert scanned_files >= 8
     assert mask_secret("AIzaSyDummyKeyForMaskTesting123456789") == "AIza****...****6789"
+
+
+def test_gemini_model_versions_and_fallback_chain() -> None:
+    """驗證 Gemini 模型版本清單與自動降級備援鏈完整性."""
+    assert "gemini-2.5-flash" in SUPPORTED_GEMINI_MODELS
+    assert "gemini-2.5-pro" in SUPPORTED_GEMINI_MODELS
+    assert "gemini-2.0-flash" in SUPPORTED_GEMINI_MODELS
+
+    chain = get_candidate_gemini_models("gemini-2.5-pro")
+    assert chain[0] == "gemini-2.5-pro"
+    assert set(chain) == set(SUPPORTED_GEMINI_MODELS)
+
+    # 未知模型名稱應自動降級回預設首選 gemini-2.5-flash
+    fallback_chain = get_candidate_gemini_models("unknown-model-v0")
+    assert fallback_chain[0] == "gemini-2.5-flash"
+
+    assert is_valid_gemini_key_format("AIzaSyDummyKeyForMaskTesting123456789") is True
+    assert is_valid_gemini_key_format("AQ.Ab8RN6Kzo3CxImmesCkeZgk") is False

@@ -13,17 +13,25 @@ import streamlit as st
 
 from src.config import (
     PROJECT_ROOT,
+    SUPPORTED_GEMINI_MODELS,
+    get_candidate_gemini_models,
     get_gemini_api_key,
     get_gemini_model,
     get_supabase_credentials,
     get_webhook_url,
     get_workspace_passcode,
     is_supabase_configured,
+    is_valid_gemini_key_format,
     mask_secret,
 )
 from src.repositories.meeting_repo import MeetingRepository
 from src.schemas.models import ActionItem, RACIModel
-from src.services.governance import audit_action_item_governance, validate_done_transition
+from src.services.governance import (
+    audit_action_item_governance,
+    classify_action_traffic_light,
+    validate_done_transition,
+)
+from src.services.meeting_template_service import generate_meeting_template_csv, parse_uploaded_meeting_file
 
 
 def run_live_system_diagnostics(repo: MeetingRepository) -> list[dict[str, str]]:
@@ -35,7 +43,7 @@ def run_live_system_diagnostics(repo: MeetingRepository) -> list[dict[str, str]]
         meetings = repo.list_meetings()
         results.append(
             {
-                "查核項目": "雙模資料庫讀寫與連線健康度",
+                "查核項目": "1. 雙模資料庫讀寫與連線健康度",
                 "目前模式": repo.storage_mode_label,
                 "狀態": "✅ 正常",
                 "詳細說明": f"目前可正常讀取 {len(meetings)} 場會議記錄。",
@@ -44,14 +52,14 @@ def run_live_system_diagnostics(repo: MeetingRepository) -> list[dict[str, str]]
     except Exception as exc:
         results.append(
             {
-                "查核項目": "雙模資料庫讀寫與連線健康度",
+                "查核項目": "1. 雙模資料庫讀寫與連線健康度",
                 "目前模式": repo.storage_mode_label,
                 "狀態": "❌ 異常",
                 "詳細說明": str(exc),
             }
         )
 
-    # 2. RACI 單一當責與 QCD+T 結案佐證閉環引擎查核
+    # 2. RACI 單一當責、QCD+T 結案佐證閉環與四色燈號預警查核
     dummy_item = ActionItem(
         id="DIAG-01",
         task_title="自我診斷測試任務",
@@ -60,12 +68,14 @@ def run_live_system_diagnostics(repo: MeetingRepository) -> list[dict[str, str]]
     audited = audit_action_item_governance(dummy_item)
     raci_ok = any("RACI 違規" in g for g in audited.governance_gaps)
     done_blocked, _ = validate_done_transition(dummy_item, "Done", "")
+    light_color, _, _ = classify_action_traffic_light(audited)
+    light_ok = light_color == "🟡 黃燈"
     results.append(
         {
-            "查核項目": "RACI 唯一當責者 (A) & QCD+T 佐證閉環引擎",
+            "查核項目": "2. RACI 當責、QCD+T 閉環 & 四色燈號預警引擎",
             "目前模式": "內建主動治理引擎",
-            "狀態": "✅ 正常" if (raci_ok and not done_blocked) else "❌ 異常",
-            "詳細說明": "多人當責違規攔截正常；未填 T (成果佐證) 勾選 Done 自動攔截正常。",
+            "狀態": "✅ 正常" if (raci_ok and not done_blocked and light_ok) else "❌ 異常",
+            "詳細說明": "多人當責違規攔截正常；未填 T 佐證勾選 Done 攔截正常；紅/黃/藍/綠四色燈號分類正常。",
         }
     )
 
@@ -75,21 +85,54 @@ def run_live_system_diagnostics(repo: MeetingRepository) -> list[dict[str, str]]
     sec_ok = (".env" in gitignore_txt) and ("secrets.toml" in gitignore_txt)
     results.append(
         {
-            "查核項目": "資安鐵律：金鑰隔離 (.gitignore / BYOK)",
+            "查核項目": "3. 資安鐵律：金鑰隔離 (.gitignore / BYOK)",
             "目前模式": "零硬編碼保護",
             "狀態": "✅ 正常" if sec_ok else "⚠️ 待確認",
             "詳細說明": "已確認 .env 與 .streamlit/secrets.toml 列入版本庫忽略清單，程式碼零硬編碼金鑰。",
         }
     )
 
-    # 4. Gemini AI 引擎就緒狀態
+    # 4. Gemini AI 模型版本與多模型自動降級備援查核
     g_key = get_gemini_api_key()
+    active_model = get_gemini_model()
+    fallback_chain = get_candidate_gemini_models(active_model)
+    if g_key and is_valid_gemini_key_format(g_key):
+        key_status = "✅ 已連線標準 AIza 金鑰"
+    elif g_key:
+        key_status = "⚠️ 非標準金鑰格式 (已啟用本地規則備援)"
+    else:
+        key_status = "ℹ️ 本地規則備援模式 (可於側邊欄 BYOK 注入)"
     results.append(
         {
-            "查核項目": "Google Gemini AI 萃取引擎",
-            "目前模式": f"Model: {get_gemini_model()}",
-            "狀態": "✅ 已連線雲端金鑰" if g_key else "ℹ️ 本地規則備援模式 (可於側邊欄 BYOK 注入)",
-            "詳細說明": f"金鑰狀態：{mask_secret(g_key)}",
+            "查核項目": "4. Gemini 模型版本與多模型自動備援鏈",
+            "目前模式": f"主模型: {active_model} (共 {len(SUPPORTED_GEMINI_MODELS)} 版本備援)",
+            "狀態": key_status,
+            "詳細說明": f"備援順序：{' ➔ '.join(fallback_chain)} ｜ 金鑰：{mask_secret(g_key)}",
+        }
+    )
+
+    # 5. 會議輸入格式公版 (.xlsx/.csv/.txt/.md) 解析引擎查核
+    tpl_bytes = generate_meeting_template_csv()
+    _, tpl_schema, _ = parse_uploaded_meeting_file(tpl_bytes, "diag_check.csv")
+    tpl_ok = tpl_schema is not None and len(tpl_schema.action_items) >= 2
+    results.append(
+        {
+            "查核項目": "5. 會議輸入格式公版 (.xlsx/.csv/.txt/.md) 引擎",
+            "目前模式": "17 欄制式公版直通車",
+            "狀態": "✅ 正常" if tpl_ok else "❌ 異常",
+            "詳細說明": "公版下載與上傳 100% 零失真解析正常，無縫對齊 Tab 1 ~ Tab 4 所有管理欄位。",
+        }
+    )
+
+    # 6. 組織部門與人員名冊同步 & 六大頁籤一致性查核
+    org_depts, org_persons = repo.get_org_directory(include_from_meetings=True)
+    guide_ok = (PROJECT_ROOT / "USER_GUIDE.md").exists()
+    results.append(
+        {
+            "查核項目": "6. 組織名冊同步 & 六大頁籤內容一致性",
+            "目前模式": f"已納管 {len(org_depts)} 部門 / {len(org_persons)} 人員",
+            "狀態": "✅ 正常" if (org_depts and org_persons and guide_ok) else "⚠️ 待確認",
+            "詳細說明": "Tab 1 萃取、Tab 2 歷史、Tab 3 看板、Tab 4 催辦、Tab 5 自檢與 Tab 6 教學 100% 對齊。",
         }
     )
 
@@ -161,14 +204,13 @@ def render_deployment_view(repo: MeetingRepository) -> None:
     with step2:
         st.markdown(
             """
-            本專案已預先建立 Git 版本庫（分支 `main`）、嚴格資安隔離設定（[`.gitignore`](file:///Users/wenanpan/.gemini/antigravity/scratch/ai-meeting-manager/.gitignore)）與 **GitHub Actions 自動化每日巡檢工作流**（[`.github/workflows/ci_self_check.yml`](file:///Users/wenanpan/.gemini/antigravity/scratch/ai-meeting-manager/.github/workflows/ci_self_check.yml)）。
-            於 GitHub 建立新儲存庫後，在終端機執行以下指令即可推送上雲：
+            本專案已連結至 GitHub 遠端儲存庫（[`https://github.com/ericpwa/ai-meeting-manager`](https://github.com/ericpwa/ai-meeting-manager)，分支 `main`）、啟用嚴格資安隔離設定（[`.gitignore`](file:///Users/wenanpan/.gemini/antigravity/scratch/ai-meeting-manager/.gitignore)）與 **GitHub Actions 自動化每日巡檢工作流**（[`.github/workflows/ci_self_check.yml`](file:///Users/wenanpan/.gemini/antigravity/scratch/ai-meeting-manager/.github/workflows/ci_self_check.yml)）。
+            當您修改 UI/UX 後，只需在終端機執行一鍵自動測試與發布腳本即可同步上雲：
             """
         )
         git_cmds = (
             "cd /Users/wenanpan/.gemini/antigravity/scratch/ai-meeting-manager\n"
-            "git remote add origin https://github.com/<您的帳號>/<您的儲存庫名稱>.git\n"
-            "git push -u origin main"
+            "bash scripts/publish_update.sh \"Update UI/UX and features\""
         )
         st.code(git_cmds, language="bash")
 

@@ -14,7 +14,7 @@ from src.schemas.models import (
     SMARTGoalModel,
 )
 from src.services.ai_service import extract_meeting_from_transcript, transcribe_audio
-from src.services.governance import audit_meeting_extraction
+from src.services.governance import audit_meeting_extraction, classify_action_traffic_light
 from src.services.meeting_template_service import (
     STANDARD_COLUMNS,
     generate_meeting_template_csv,
@@ -117,6 +117,9 @@ def render_extraction_view(repo: MeetingRepository) -> None:
             if st.button("🧹 清空文本", key="btn_clear_transcript"):
                 st.session_state["draft_transcript_text"] = ""
                 st.session_state["textarea_direct_transcript"] = ""
+                st.session_state["textarea_file_transcript"] = ""
+                st.session_state["textarea_audio_transcript"] = ""
+                st.session_state.pop("pre_parsed_template_schema", None)
                 st.session_state.pop("latest_extracted_meeting", None)
 
         if "textarea_direct_transcript" not in st.session_state:
@@ -277,6 +280,13 @@ def _render_extraction_preview_and_save(
             key="edit_ext_attendees",
         )
 
+    org_depts, org_persons = repo.get_org_directory(include_from_meetings=True)
+    if org_depts or org_persons:
+        st.caption(
+            f"💡 **組織名冊快速參照（已與 Tab 2 / Tab 3 / Tab 4 選單同步）** — "
+            f"🏢 部門：`{', '.join(org_depts[:10])}` ｜ 👥 人員：`{', '.join(org_persons[:10])}`"
+        )
+
     edited_summary = st.text_area(
         "📝 (b) 高階執行摘要 (Executive Summary)",
         value=extraction.executive_summary,
@@ -303,9 +313,10 @@ def _render_extraction_preview_and_save(
     status_options = ["Pending", "In Progress", "Blocked", "Done"]
 
     for idx, item in enumerate(extraction.action_items):
+        _, _, combined_light_badge = classify_action_traffic_light(item)
         gap_badge = f" ⚠️ ({len(item.governance_gaps)} 項治理缺口)" if item.governance_gaps else " ✅ (治理合規)"
         with st.expander(
-            f"【{item.id}】{item.task_title} ｜ 當責者(A)：{item.raci.accountable} ｜ 期限：{item.due_date}{gap_badge}",
+            f"【{item.id}】{combined_light_badge} ｜ {item.task_title} ｜ 當責者(A)：{item.raci.accountable} ｜ 期限：{item.due_date}{gap_badge}",
             expanded=True,
         ):
             if item.governance_gaps:
@@ -362,7 +373,7 @@ def _render_extraction_preview_and_save(
                 s_meas = st.text_input("M (可衡量指標)", value=item.smart.measurable, key=f"ext_smart_m_{idx}")
 
             st.markdown("**3️⃣ QCD+T 品質、成本、交付與真實性可驗證證據要求**")
-            qc1, qc2, qc3, qc4 = st.columns(4)
+            qc1, qc2, qc3, qc4, qc5 = st.columns(5)
             with qc1:
                 q_qual = st.text_input("Q (品質與驗收條件)", value=item.qcdt.quality_criteria, key=f"ext_qcdt_q_{idx}")
             with qc2:
@@ -371,6 +382,13 @@ def _render_extraction_preview_and_save(
                 q_deliv = st.text_input("D (交付里程碑)", value=item.qcdt.delivery_milestone, key=f"ext_qcdt_d_{idx}")
             with qc4:
                 q_truth = st.text_input("T (可驗證證據要求)", value=item.qcdt.truthfulness_req, key=f"ext_qcdt_t_{idx}")
+            with qc5:
+                q_ev_sub = st.text_input(
+                    "T (已提交成果佐證)",
+                    value=item.qcdt.evidence_submitted,
+                    key=f"ext_qcdt_ev_sub_{idx}",
+                    help="若公版匯入時任務狀態已為 Done，請確保此欄填寫具體成果佐證連結或紀錄。",
+                )
 
             updated_item = ActionItem(
                 id=item.id,
@@ -399,8 +417,8 @@ def _render_extraction_preview_and_save(
                     cost_budget=q_cost.strip() or "0 元 (內部資源/工時)",
                     delivery_milestone=q_deliv.strip(),
                     truthfulness_req=q_truth.strip(),
-                    evidence_submitted=item.qcdt.evidence_submitted,
-                    evidence_verified=item.qcdt.evidence_verified,
+                    evidence_submitted=q_ev_sub.strip(),
+                    evidence_verified=bool(item.qcdt.evidence_verified or (t_status == "Done" and q_ev_sub.strip())),
                     evidence_audit_feedback=item.qcdt.evidence_audit_feedback,
                 ),
             )

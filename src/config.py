@@ -82,6 +82,20 @@ def get_config_value(key: str, default: str = "", session_key: str | None = None
     return default
 
 
+SUPPORTED_GEMINI_MODELS: list[str] = [
+    "gemini-2.5-flash",
+    "gemini-2.5-flash-lite",
+    "gemini-2.5-pro",
+    "gemini-2.0-flash",
+]
+
+
+def is_valid_gemini_key_format(api_key: str) -> bool:
+    """檢查 API Key 是否符合 Google AI Studio 標準金鑰格式 (以 AIza 開頭且長度合理)."""
+    cleaned = (api_key or "").strip()
+    return bool(cleaned.startswith("AIza") and len(cleaned) >= 30)
+
+
 def get_gemini_api_key() -> str:
     """取得 Google Gemini API Key (支援 .env / st.secrets / Sidebar BYOK)."""
     return get_config_value("GEMINI_API_KEY", default="", session_key="byok_gemini_api_key")
@@ -89,7 +103,16 @@ def get_gemini_api_key() -> str:
 
 def get_gemini_model() -> str:
     """取得 Gemini 模型名稱，預設使用免費額度支援度最佳之 gemini-2.5-flash."""
-    return get_config_value("GEMINI_MODEL", default="gemini-2.5-flash", session_key="byok_gemini_model")
+    model = get_config_value("GEMINI_MODEL", default="gemini-2.5-flash", session_key="byok_gemini_model")
+    return model if model in SUPPORTED_GEMINI_MODELS else SUPPORTED_GEMINI_MODELS[0]
+
+
+def get_candidate_gemini_models(preferred: str | None = None) -> list[str]:
+    """回傳具備自動降級備援順序之 Gemini 模型清單（確保單一模型版本受限時自動切換可用版本）."""
+    primary = (preferred or get_gemini_model()).strip()
+    if primary not in SUPPORTED_GEMINI_MODELS:
+        primary = SUPPORTED_GEMINI_MODELS[0]
+    return [primary] + [m for m in SUPPORTED_GEMINI_MODELS if m != primary]
 
 
 def get_supabase_credentials() -> tuple[str, str]:

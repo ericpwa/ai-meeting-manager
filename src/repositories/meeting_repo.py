@@ -601,6 +601,7 @@ class MeetingRepository:
         new_status: str,
         evidence_submitted: str | None = None,
         accountable: str | None = None,
+        responsible: list[str] | None = None,
         due_date: str | None = None,
         quality_criteria: str | None = None,
         truthfulness_req: str | None = None,
@@ -638,6 +639,10 @@ class MeetingRepository:
         if accountable is not None and accountable.strip():
             target_item.raci.accountable = accountable.strip()
             target_item.owner = accountable.strip()
+        if responsible is not None:
+            cleaned_r = [r.strip() for r in responsible if r.strip()]
+            if cleaned_r:
+                target_item.raci.responsible = cleaned_r
         if due_date is not None and due_date.strip():
             target_item.due_date = due_date.strip()
         if quality_criteria is not None:

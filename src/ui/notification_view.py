@@ -68,8 +68,9 @@ def render_notification_view(repo: MeetingRepository) -> None:
                         f"- ⚠️ 治理缺口：**{grp.gap_count}** 件 ｜ ⏳ 即將到期：**{grp.due_soon_count}** 件"
                     )
                     for item in grp.items:
+                        light_tag = "🔴 紅燈" if item.urgency_category in {"🚨 逾期未完成", "🛑 執行受阻 (Blocked)"} else "🟡 黃燈"
                         st.markdown(
-                            f"  - `{item.action_id}` {item.task_title[:22]}... ({item.urgency_category})"
+                            f"  - `{item.action_id}` {item.task_title[:22]}... ({light_tag}｜{item.urgency_category})"
                         )
 
     st.markdown("#### ✉️ 催辦訊息產生器 & Webhook 自動推播工作台")
@@ -78,9 +79,10 @@ def render_notification_view(repo: MeetingRepository) -> None:
     merged_accountables = list(dict.fromkeys([g.accountable for g in groups] + org_persons))
     accountable_options = ["全體當責人 (跨部門總表)"] + merged_accountables
     urgency_options = [
-        "全部待催辦項目",
-        "🚨 僅逾期與受阻項目 (高優先級)",
-        "⚠️ 僅存在治理缺口項目 (要求補齊 A / Q / T)",
+        "全部待催辦項目 (紅燈＋黃燈)",
+        "🚨 僅逾期與受阻項目 (🔴 紅燈高優先級)",
+        "⚠️ 僅存在治理缺口項目 (🟡 黃燈要求補齊 A / Q / T)",
+        "⏳ 僅 3日內即將到期項目 (🟡 黃燈到期預警)",
     ]
 
     c_sel1, c_sel2, c_sel3, c_sel4 = st.columns([2, 2, 1.8, 1.8])
@@ -130,6 +132,8 @@ def render_notification_view(repo: MeetingRepository) -> None:
         ]
     elif selected_urgency.startswith("⚠️"):
         target_entries = [e for e in target_entries if e.governance_gaps]
+    elif selected_urgency.startswith("⏳"):
+        target_entries = [e for e in target_entries if e.urgency_category == "⏳ 3日內即將到期"]
 
     channel_code = "slack_teams"
     if selected_channel_label.startswith("📧"):

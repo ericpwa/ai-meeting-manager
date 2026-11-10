@@ -13,7 +13,7 @@ import datetime
 import re
 from typing import Any
 
-from src.config import get_gemini_api_key, get_gemini_model
+from src.config import get_candidate_gemini_models, get_gemini_api_key, get_gemini_model
 from src.schemas.models import (
     ActionItem,
     EvidenceAuditResult,
@@ -93,17 +93,25 @@ def transcribe_audio(
             "請將這段會議音訊完整、精準地轉譯為繁體中文會議逐字稿。"
             "若能辨識不同發言者或部門角色，請以『發言者：內容』格式分段呈現，並保留所有關於負責人、期限、預算、品質標準與決策的細節。"
         )
-        response = client.models.generate_content(
-            model=model_name,
-            contents=[
-                types.Part.from_bytes(data=audio_bytes, mime_type=mime_type),
-                prompt,
-            ],
-        )
-        text = (response.text or "").strip()
-        if not text:
-            return demo_transcript, False, "⚠️ Gemini 音訊轉譯回傳空白內容，已自動切換模擬逐字稿供預覽。"
-        return text, True, f"✅ 已透過 Google Gemini ({model_name}) 完成音訊多模態逐字稿轉譯！"
+        last_exc: Exception | None = None
+        for cand_model in get_candidate_gemini_models(model_name):
+            try:
+                response = client.models.generate_content(
+                    model=cand_model,
+                    contents=[
+                        types.Part.from_bytes(data=audio_bytes, mime_type=mime_type),
+                        prompt,
+                    ],
+                )
+                text = (response.text or "").strip()
+                if text:
+                    return text, True, f"✅ 已透過 Google Gemini ({cand_model}) 完成音訊多模態逐字稿轉譯！"
+            except Exception as inner_exc:
+                last_exc = inner_exc
+                continue
+        if last_exc is not None:
+            raise last_exc
+        return demo_transcript, False, "⚠️ Gemini 音訊轉譯回傳空白內容，已自動切換模擬逐字稿供預覽。"
     except Exception as exc:
         return (
             demo_transcript,
@@ -298,34 +306,43 @@ def extract_meeting_from_transcript(
         from google.genai import types
 
         client = genai.Client(api_key=resolved_key)
-        response = client.models.generate_content(
-            model=model_name,
-            contents=(
-                "請分析以下會議逐字稿，並萃取結構化會議記錄（含標題、高階執行摘要、關鍵決策清單、"
-                "以及結合 RACI / SMART / QCD+T 之待辦事項清單）：\n\n"
-                f"{cleaned_transcript}"
-            ),
-            config=types.GenerateContentConfig(
-                system_instruction=EXTRACTION_SYSTEM_PROMPT,
-                response_mime_type="application/json",
-                response_schema=MeetingExtractionSchema,
-                temperature=0.1,
-            ),
-        )
+        last_exc: Exception | None = None
+        for cand_model in get_candidate_gemini_models(model_name):
+            try:
+                response = client.models.generate_content(
+                    model=cand_model,
+                    contents=(
+                        "請分析以下會議逐字稿，並萃取結構化會議記錄（含標題、高階執行摘要、關鍵決策清單、"
+                        "以及結合 RACI / SMART / QCD+T 之待辦事項清單）：\n\n"
+                        f"{cleaned_transcript}"
+                    ),
+                    config=types.GenerateContentConfig(
+                        system_instruction=EXTRACTION_SYSTEM_PROMPT,
+                        response_mime_type="application/json",
+                        response_schema=MeetingExtractionSchema,
+                        temperature=0.1,
+                    ),
+                )
 
-        if getattr(response, "parsed", None) is not None and isinstance(response.parsed, MeetingExtractionSchema):
-            parsed_obj = response.parsed
-        else:
-            raw_json = (response.text or "").strip()
-            parsed_obj = MeetingExtractionSchema.model_validate_json(raw_json)
+                if getattr(response, "parsed", None) is not None and isinstance(response.parsed, MeetingExtractionSchema):
+                    parsed_obj = response.parsed
+                else:
+                    raw_json = (response.text or "").strip()
+                    parsed_obj = MeetingExtractionSchema.model_validate_json(raw_json)
 
-        audited = audit_meeting_extraction(parsed_obj)
-        assert isinstance(audited, MeetingExtractionSchema)
-        return (
-            audited,
-            True,
-            f"✅ 已透過 Google Gemini ({model_name}) Structured Outputs 完成 RACI + SMART + QCD+T 結構化萃取與治理稽核！",
-        )
+                audited = audit_meeting_extraction(parsed_obj)
+                assert isinstance(audited, MeetingExtractionSchema)
+                return (
+                    audited,
+                    True,
+                    f"✅ 已透過 Google Gemini ({cand_model}) Structured Outputs 完成 RACI + SMART + QCD+T 結構化萃取與治理稽核！",
+                )
+            except Exception as inner_exc:
+                last_exc = inner_exc
+                continue
+        if last_exc is not None:
+            raise last_exc
+        raise RuntimeError("所有候選 Gemini 模型均未回傳有效結果。")
     except Exception as exc:
         fallback_result = _fallback_rule_based_extraction(cleaned_transcript)
         return (
@@ -372,18 +389,22 @@ def audit_action_evidence(
                 f"執行者實際提交之成果佐證 (Evidence Submitted)：{cleaned_ev}\n\n"
                 "請以嚴謹的內部稽核角度，評估實際提交之成果佐證是否具體、真實可查核，且滿足 Q 與 T 之要求。"
             )
-            response = client.models.generate_content(
-                model=model_name,
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    response_mime_type="application/json",
-                    response_schema=EvidenceAuditResult,
-                    temperature=0.1,
-                ),
-            )
-            if getattr(response, "parsed", None) is not None and isinstance(response.parsed, EvidenceAuditResult):
-                return response.parsed, True
-            return EvidenceAuditResult.model_validate_json((response.text or "").strip()), True
+            for cand_model in get_candidate_gemini_models(model_name):
+                try:
+                    response = client.models.generate_content(
+                        model=cand_model,
+                        contents=prompt,
+                        config=types.GenerateContentConfig(
+                            response_mime_type="application/json",
+                            response_schema=EvidenceAuditResult,
+                            temperature=0.1,
+                        ),
+                    )
+                    if getattr(response, "parsed", None) is not None and isinstance(response.parsed, EvidenceAuditResult):
+                        return response.parsed, True
+                    return EvidenceAuditResult.model_validate_json((response.text or "").strip()), True
+                except Exception:
+                    continue
         except Exception:
             pass
 

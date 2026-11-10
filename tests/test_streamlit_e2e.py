@@ -103,7 +103,10 @@ def test_streamlit_action_item_evidence_closed_loop_and_tracker(tmp_path: Path, 
     # (e) 測試 Tab 5 雲端部署與系統自檢中心：點擊「立即執行系統自我查核」
     at.button(key="btn_run_live_diagnostics").click().run()
     assert len(at.exception) == 0
-    assert len(at.session_state.get("live_diag_results", [])) == 4
+    assert len(at.session_state.get("live_diag_results", [])) == 6
 
-    # (f) 驗證 Tab 6 新手教學與操作指南正常渲染無異常
-    assert any("新手教學與超簡單操作說明書" in m.value for m in at.markdown)
+    # (f) 驗證 Tab 6 新手教學與操作指南正常渲染無異常，且與 Tab 1~Tab 5 關鍵功能一致
+    md_blob = "\n".join(m.value for m in at.markdown)
+    assert "新手教學與超簡單操作說明書" in md_blob
+    assert "會議輸入格式公版" in md_blob
+    assert "四色「燈號預警」" in md_blob

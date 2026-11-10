@@ -20,7 +20,7 @@ from typing import Literal
 import httpx
 from pydantic import BaseModel, Field
 
-from src.config import get_gemini_api_key, get_gemini_model, get_webhook_url
+from src.config import get_candidate_gemini_models, get_gemini_api_key, get_gemini_model, get_webhook_url
 from src.schemas.models import ActionItem, MeetingRecord
 
 
@@ -265,7 +265,7 @@ def polish_reminder_with_ai(
     api_key: str | None = None,
 ) -> tuple[str, bool, str]:
     """選用透過 Gemini 2.5 Flash 針對催辦訊息進行高情商且具管理魄力之潤飾."""
-    resolved_key = (api_key or get_gemini_api_key()).strip()
+    resolved_key = (api_key if api_key is not None else get_gemini_api_key()).strip()
     model_name = get_gemini_model()
 
     if not resolved_key:
@@ -284,10 +284,18 @@ def polish_reminder_with_ai(
             "要求：保留所有任務編號、當責者 (A)、執行者 (R)、截止日期、Q 驗收標準、T 佐證要求與治理缺口細節，使用繁體中文輸出：\n\n"
             f"{base_message}"
         )
-        resp = client.models.generate_content(model=model_name, contents=prompt)
-        polished = (resp.text or "").strip()
-        if polished:
-            return polished, True, f"✅ 已透過 Google Gemini ({model_name}) 完成「{tone}」語氣潤飾！"
+        last_exc: Exception | None = None
+        for cand_model in get_candidate_gemini_models(model_name):
+            try:
+                resp = client.models.generate_content(model=cand_model, contents=prompt)
+                polished = (resp.text or "").strip()
+                if polished:
+                    return polished, True, f"✅ 已透過 Google Gemini ({cand_model}) 完成「{tone}」語氣潤飾！"
+            except Exception as inner_exc:
+                last_exc = inner_exc
+                continue
+        if last_exc is not None:
+            raise last_exc
     except Exception as exc:
         return base_message, False, f"⚠️ Gemini 潤飾呼叫失敗（{exc}），已保留原始結構化催辦文案。"
 

@@ -8,6 +8,7 @@ import streamlit as st
 from src.repositories.meeting_repo import MeetingRepository
 from src.schemas.models import ActionItem, MeetingRecord
 from src.services.ai_service import audit_action_evidence
+from src.services.governance import classify_action_traffic_light
 
 
 def _export_meeting_markdown(meeting: MeetingRecord) -> str:
@@ -29,9 +30,10 @@ def _export_meeting_markdown(meeting: MeetingRecord) -> str:
     lines.append("")
     lines.append("## 🎯 待辦事項與 RACI + SMART + QCD+T 治理矩陣")
     for act in meeting.action_items:
+        _, _, combined_light = classify_action_traffic_light(act)
         lines.extend(
             [
-                f"### [{act.id}] {act.task_title} ({act.status})",
+                f"### [{act.id}] {act.task_title} ({act.status} ｜ {combined_light})",
                 f"- **主責部門**：{act.department} ｜ **截止日期**：{act.due_date}",
                 f"- **RACI 矩陣**：**A (當責)**：{act.raci.accountable} ｜ **R (執行)**：{', '.join(act.raci.responsible)} ｜ **C (徵詢)**：{', '.join(act.raci.consulted)} ｜ **I (告知)**：{', '.join(act.raci.informed)}",
                 f"- **SMART 目標 ({act.smart.hierarchy_level})**：具體性(S)：{act.smart.specific} ／ 衡量指標(M)：{act.smart.measurable}",
@@ -151,8 +153,9 @@ def render_meetings_view(repo: MeetingRepository) -> None:
 
 
 def _render_action_item_card(repo: MeetingRepository, meeting: MeetingRecord, act: ActionItem) -> None:
-    """渲染單一待辦事項之互動管理卡片（含快速勾選 Done、T 佐證閉環與 AI 稽核）."""
+    """渲染單一待辦事項之互動管理卡片（含四色燈號預警、快速勾選 Done、T 佐證閉環與 AI 稽核）."""
     uid = f"{meeting.id}_{act.id}"
+    _, _, combined_light = classify_action_traffic_light(act)
     status_icon = {
         "Done": "✅",
         "In Progress": "⏳",
@@ -165,7 +168,7 @@ def _render_action_item_card(repo: MeetingRepository, meeting: MeetingRecord, ac
         with top_c1:
             st.markdown(f"**{status_icon} [{act.id}] {act.task_title}**")
             st.caption(
-                f"🏷️ **SMART 層級**：`{act.smart.hierarchy_level}` ｜ 🏢 **部門**：{act.department} ｜ 📅 **截止日**：`{act.due_date}`"
+                f"🚦 **燈號預警**：`{combined_light}` ｜ 🏷️ **SMART**：`{act.smart.hierarchy_level}` ｜ 🏢 **部門**：{act.department} ｜ 📅 **截止日**：`{act.due_date}`"
             )
         with top_c2:
             st.markdown(f"👑 **當責者 (A)**：`{act.raci.accountable}`")
@@ -205,7 +208,7 @@ def _render_action_item_card(repo: MeetingRepository, meeting: MeetingRecord, ac
             default_status = "Done" if is_done_checked else (act.status if act.status != "Done" else "In Progress")
             s_idx = status_options.index(default_status) if default_status in status_options else 0
 
-            ed_c1, ed_c2, ed_c3 = st.columns([1.5, 2, 1.5])
+            ed_c1, ed_c2, ed_c3, ed_c4 = st.columns([1.3, 1.7, 1.8, 1.3])
             with ed_c1:
                 new_status = st.selectbox(
                     "更新執行狀態",
@@ -220,6 +223,12 @@ def _render_action_item_card(repo: MeetingRepository, meeting: MeetingRecord, ac
                     key=f"inp_acc_{uid}",
                 )
             with ed_c3:
+                new_resp = st.text_input(
+                    "更新實際執行者 (R - 逗號分隔)",
+                    value=", ".join(act.raci.responsible),
+                    key=f"inp_resp_{uid}",
+                )
+            with ed_c4:
                 new_due = st.text_input(
                     "更新截止日 (YYYY-MM-DD)",
                     value=act.due_date,
@@ -257,12 +266,14 @@ def _render_action_item_card(repo: MeetingRepository, meeting: MeetingRecord, ac
             btn_c1, btn_c2 = st.columns([1.5, 2])
             with btn_c1:
                 if st.button("💾 儲存任務狀態與佐證更新", type="primary", key=f"btn_save_act_{uid}"):
+                    parsed_resp = [r.strip() for r in new_resp.split(",") if r.strip()]
                     ok, msg, _ = repo.update_action_item(
                         meeting_id=meeting.id,
                         action_id=act.id,
                         new_status=new_status,
                         evidence_submitted=new_evidence,
                         accountable=new_acc,
+                        responsible=parsed_resp,
                         due_date=new_due,
                         quality_criteria=new_q,
                         truthfulness_req=new_t_req,
@@ -276,6 +287,7 @@ def _render_action_item_card(repo: MeetingRepository, meeting: MeetingRecord, ac
 
             with btn_c2:
                 if st.button("🤖 AI 稽核成果佐證 (比對 T 佐證 vs Q 品質條件)", key=f"btn_audit_ev_{uid}"):
+                    parsed_resp = [r.strip() for r in new_resp.split(",") if r.strip()]
                     temp_item = act.model_copy(deep=True)
                     temp_item.qcdt.quality_criteria = new_q
                     temp_item.qcdt.truthfulness_req = new_t_req
@@ -287,6 +299,7 @@ def _render_action_item_card(repo: MeetingRepository, meeting: MeetingRecord, ac
                         new_status=new_status if (new_status != "Done" or audit_res.is_verified) else act.status,
                         evidence_submitted=new_evidence,
                         accountable=new_acc,
+                        responsible=parsed_resp,
                         due_date=new_due,
                         quality_criteria=new_q,
                         truthfulness_req=new_t_req,
