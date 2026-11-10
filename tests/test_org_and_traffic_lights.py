@@ -112,3 +112,44 @@ def test_classify_action_traffic_light_all_six_states() -> None:
     l6, s6, _ = classify_action_traffic_light(_make_clean_item("Done", "2026-11-09"), ref_today)
     assert l6 == "🟢 綠燈"
     assert s6 == "✅ 已完成 (Done)"
+
+
+def test_meeting_input_templates_all_four_formats() -> None:
+    """驗證『會議輸入格式公版』(xlsx/csv/md/txt) 之產生、上傳解析與 AI 結構化萃取 100% 精準對映."""
+    from src.services.ai_service import extract_meeting_from_transcript
+    from src.services.meeting_template_service import (
+        generate_meeting_template_csv,
+        generate_meeting_template_md,
+        generate_meeting_template_txt,
+        generate_meeting_template_xlsx,
+        parse_uploaded_meeting_file,
+    )
+
+    # 1. Excel (.xlsx) 公版產生與解析
+    xlsx_bytes = generate_meeting_template_xlsx()
+    txt_x, schema_x, msg_x = parse_uploaded_meeting_file(xlsx_bytes, "meeting_input_template.xlsx")
+    assert schema_x is not None
+    assert len(schema_x.action_items) == 2
+    assert schema_x.action_items[0].id == "ACT-01"
+    assert schema_x.action_items[0].raci.accountable == "林雅婷 (AI 架構師)"
+    assert "🎯" in msg_x
+
+    # 2. CSV (.csv) 公版產生與解析
+    csv_bytes = generate_meeting_template_csv()
+    txt_c, schema_c, _ = parse_uploaded_meeting_file(csv_bytes, "meeting_input_template.csv")
+    assert schema_c is not None
+    assert len(schema_c.action_items) == 2
+    assert schema_c.action_items[1].id == "ACT-02"
+
+    # 3. Markdown (.md) 公版產生與解析
+    md_bytes = generate_meeting_template_md()
+    txt_m, schema_m, _ = parse_uploaded_meeting_file(md_bytes, "meeting_input_template.md")
+    assert schema_m is not None
+    assert len(schema_m.action_items) == 2
+
+    # 4. TXT (.txt) 公版產生並送入 extract_meeting_from_transcript
+    txt_bytes = generate_meeting_template_txt()
+    extracted, _, ext_msg = extract_meeting_from_transcript(txt_bytes.decode("utf-8"), api_key="")
+    assert len(extracted.action_items) == 2
+    assert extracted.action_items[0].task_title == "完成 AI 會議記錄公版匯入模組與四色燈號預警測試"
+    assert "標準輸入格式公版" in ext_msg

@@ -23,6 +23,7 @@ from src.schemas.models import (
     SMARTGoalModel,
 )
 from src.services.governance import audit_meeting_extraction, is_vague_or_empty
+from src.services.meeting_template_service import try_parse_structured_template_text
 
 EXTRACTION_SYSTEM_PROMPT = """你是一位精通企業治理與專案管理的「AI 會議記錄管理專家」。
 請根據使用者提供的會議逐字稿或紀錄文本，嚴格依照指定的 Pydantic Schema (`MeetingExtractionSchema`) 進行結構化萃取。
@@ -269,6 +270,17 @@ def extract_meeting_from_transcript(
     cleaned_transcript = (transcript or "").strip()
     if not cleaned_transcript:
         raise ValueError("會議逐字稿內容不可為空白。")
+
+    # 優先檢核是否為「標準輸入格式公版 (xlsx/csv/txt/md)」結構化內容
+    template_parsed = try_parse_structured_template_text(cleaned_transcript)
+    if template_parsed is not None:
+        audited_tpl = audit_meeting_extraction(template_parsed)
+        assert isinstance(audited_tpl, MeetingExtractionSchema)
+        return (
+            audited_tpl,
+            True,
+            f"🎯 已識別為「標準輸入格式公版」，精準萃取 {len(audited_tpl.action_items)} 項待辦事項並完成 RACI / SMART / QCD+T 治理查核（100% 欄位對齊追蹤看板與催辦中心）！",
+        )
 
     resolved_key = (api_key if api_key is not None else get_gemini_api_key()).strip()
     model_name = get_gemini_model()

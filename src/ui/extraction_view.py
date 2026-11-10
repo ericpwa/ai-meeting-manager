@@ -15,6 +15,14 @@ from src.schemas.models import (
 )
 from src.services.ai_service import extract_meeting_from_transcript, transcribe_audio
 from src.services.governance import audit_meeting_extraction
+from src.services.meeting_template_service import (
+    STANDARD_COLUMNS,
+    generate_meeting_template_csv,
+    generate_meeting_template_md,
+    generate_meeting_template_txt,
+    generate_meeting_template_xlsx,
+    parse_uploaded_meeting_file,
+)
 
 SAMPLE_TRANSCRIPT_TEMPLATE = """會議名稱：2026 Q4 跨部門 AI 客服知識庫上線與資安驗收會議
 會議日期：2026-11-10
@@ -37,15 +45,55 @@ def render_extraction_view(repo: MeetingRepository) -> None:
     """渲染會議輸入與 AI 結構化萃取工作台."""
     st.markdown("### 🎙️ 新增會議記錄 & AI 結構化治理萃取")
     st.caption(
-        "支援 **(1) 直接貼上會議逐字稿**、**(2) 上傳 `.txt` / `.md` 文檔**、或 **(3) 上傳會議音訊檔（兩階段轉譯＋結構化萃取）**。"
-        "AI 引擎將自動依循 **RACI + SMART + QCD+T** 框架萃取並主動偵測管理缺口。"
+        "支援 **(1) 直接貼上會議逐字稿或公版文本**、**(2) 上傳「輸入格式公版」或會議檔 (`.xlsx` / `.csv` / `.txt` / `.md`)**、或 **(3) 上傳會議音訊檔（兩階段轉譯＋結構化萃取）**。"
+        "AI 引擎將自動依循 **RACI + SMART + QCD+T** 框架精準萃取並無縫傳遞至歷史會議、全域追蹤看板與主動催辦中心。"
     )
+
+    # 新增：標準「輸入格式公版」下載專區 (xlsx / csv / txt / md)
+    with st.container(border=True):
+        st.markdown("##### 📥 下載「會議輸入格式公版」(`.xlsx` / `.csv` / `.txt` / `.md`) — 讓 AI 100% 精準對齊所有管理欄位")
+        st.caption(
+            f"📌 **制式公版欄位**：`{'`、`'.join(STANDARD_COLUMNS[:9])}`、`Q/C/T`、`備註/記錄` 等（填寫後上傳或貼上，即可 100% 零失真傳遞至 Tab 2、Tab 3 追蹤看板與 Tab 4 催辦中心）。"
+        )
+        tpl_c1, tpl_c2, tpl_c3, tpl_c4 = st.columns(4)
+        with tpl_c1:
+            st.download_button(
+                "📊 下載 Excel 輸入公版 (.xlsx)",
+                data=generate_meeting_template_xlsx(),
+                file_name="meeting_input_template.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key="btn_dl_meeting_tpl_xlsx",
+            )
+        with tpl_c2:
+            st.download_button(
+                "📄 下載 CSV 輸入公版 (.csv)",
+                data=generate_meeting_template_csv(),
+                file_name="meeting_input_template.csv",
+                mime="text/csv",
+                key="btn_dl_meeting_tpl_csv",
+            )
+        with tpl_c3:
+            st.download_button(
+                "📝 下載 Markdown 輸入公版 (.md)",
+                data=generate_meeting_template_md(),
+                file_name="meeting_input_template.md",
+                mime="text/markdown",
+                key="btn_dl_meeting_tpl_md",
+            )
+        with tpl_c4:
+            st.download_button(
+                "📃 下載 TXT 輸入公版 (.txt)",
+                data=generate_meeting_template_txt(),
+                file_name="meeting_input_template.txt",
+                mime="text/plain",
+                key="btn_dl_meeting_tpl_txt",
+            )
 
     input_mode = st.radio(
         "選擇會議資料輸入方式",
         options=[
             "📝 貼上會議逐字稿文本",
-            "📄 上傳文字檔案 (.txt / .md)",
+            "📄 上傳文字/表格檔案 (.xlsx / .csv / .txt / .md)",
             "🎧 上傳音訊檔案 (.mp3 / .wav / .m4a / .ogg) - 兩階段可控轉譯",
         ],
         horizontal=True,
@@ -55,12 +103,17 @@ def render_extraction_view(repo: MeetingRepository) -> None:
     source_type = "text"
 
     if input_mode.startswith("📝"):
-        col_btn1, col_btn2 = st.columns([1, 4])
+        col_btn1, col_btn2, col_btn3 = st.columns([1.4, 1.6, 3])
         with col_btn1:
             if st.button("📋 載入測試逐字稿範本", key="btn_load_demo_transcript"):
                 st.session_state["draft_transcript_text"] = SAMPLE_TRANSCRIPT_TEMPLATE
                 st.session_state["textarea_direct_transcript"] = SAMPLE_TRANSCRIPT_TEMPLATE
         with col_btn2:
+            if st.button("📑 載入標準輸入公版範本", key="btn_load_structured_template"):
+                tpl_txt = generate_meeting_template_txt().decode("utf-8")
+                st.session_state["draft_transcript_text"] = tpl_txt
+                st.session_state["textarea_direct_transcript"] = tpl_txt
+        with col_btn3:
             if st.button("🧹 清空文本", key="btn_clear_transcript"):
                 st.session_state["draft_transcript_text"] = ""
                 st.session_state["textarea_direct_transcript"] = ""
@@ -72,7 +125,7 @@ def render_extraction_view(repo: MeetingRepository) -> None:
         transcript_text = st.text_area(
             "會議逐字稿或會議紀錄內容",
             height=240,
-            placeholder="請在此貼上會議逐字稿、討論紀錄或語音轉文字內容...",
+            placeholder="請在此貼上會議逐字稿、討論紀錄，或貼上『標準輸入格式公版 (.txt/.md)』內容...",
             key="textarea_direct_transcript",
         )
         st.session_state["draft_transcript_text"] = transcript_text
@@ -80,19 +133,29 @@ def render_extraction_view(repo: MeetingRepository) -> None:
 
     elif input_mode.startswith("📄"):
         uploaded_doc = st.file_uploader(
-            "上傳 `.txt` 或 `.md` 會議記錄檔案",
-            type=["txt", "md"],
+            "上傳會議記錄檔案或『輸入格式公版』(.xlsx / .csv / .txt / .md)",
+            type=["xlsx", "csv", "txt", "md"],
             key="uploader_doc_file",
         )
         if uploaded_doc is not None:
-            raw_bytes = uploaded_doc.read()
-            decoded_text = raw_bytes.decode("utf-8", errors="replace")
-            st.session_state["draft_transcript_text"] = decoded_text
-            st.success(f"✅ 已讀取檔案 `{uploaded_doc.name}`（共 {len(decoded_text)} 字元）")
+            raw_bytes = uploaded_doc.getvalue()
+            parsed_text, pre_parsed_schema, parse_msg = parse_uploaded_meeting_file(raw_bytes, uploaded_doc.name)
+            if parsed_text:
+                st.session_state["draft_transcript_text"] = parsed_text
+                st.session_state["textarea_file_transcript"] = parsed_text
+                if pre_parsed_schema is not None:
+                    st.session_state["pre_parsed_template_schema"] = pre_parsed_schema.model_dump()
+                else:
+                    st.session_state.pop("pre_parsed_template_schema", None)
+                st.success(parse_msg)
+            else:
+                st.error(parse_msg)
+
+        if "textarea_file_transcript" not in st.session_state:
+            st.session_state["textarea_file_transcript"] = st.session_state.get("draft_transcript_text", "")
 
         transcript_text = st.text_area(
             "檔案內容預覽與微調（可於萃取前直接編修）",
-            value=st.session_state.get("draft_transcript_text", ""),
             height=220,
             key="textarea_file_transcript",
         )

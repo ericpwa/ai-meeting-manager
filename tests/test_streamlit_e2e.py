@@ -30,11 +30,11 @@ def test_streamlit_app_end_to_end(tmp_path: Path, monkeypatch) -> None:
     assert any("AI 會議記錄管理 Web App" in t.value for t in at.title)
     assert len(at.metric) >= 6
 
-    # 2. 測試在 Tab 1 點擊「載入測試逐字稿範本」
-    btn_load_demo = at.button(key="btn_load_demo_transcript")
-    btn_load_demo.click().run()
+    # 2. 測試在 Tab 1 點擊「📑 載入標準輸入公版範本」並執行精準萃取與入庫
+    btn_load_tpl = at.button(key="btn_load_structured_template")
+    btn_load_tpl.click().run()
     assert len(at.exception) == 0
-    assert "跨部門 AI 客服知識庫" in at.session_state["draft_transcript_text"]
+    assert "標準輸入格式公版" in at.session_state["draft_transcript_text"]
 
     # 3. 點擊「執行 AI 結構化萃取」
     btn_extract = at.button(key="btn_execute_extraction")
