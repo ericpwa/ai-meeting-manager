@@ -63,19 +63,20 @@ def transcribe_audio(
     回傳:
         (transcript_text, used_real_gemini, status_message)
     """
-    resolved_key = (api_key or get_gemini_api_key()).strip()
+    resolved_key = (api_key if api_key is not None else get_gemini_api_key()).strip()
     model_name = get_gemini_model()
 
+    demo_transcript = (
+        f"【音訊模擬轉譯逐字稿 - 檔案：{filename}（本地離線模擬轉譯模式）】\n"
+        "主席 (林總監 - 產品部)：各位同仁好，今天針對本季產品上市與跨部門交付召開同步會議。\n"
+        "王工程師 (AI 研發部)：目前模型推論 API 已經完成壓測，由我當責 (A) 在本週五前完成正式環境部署，"
+        "驗收條件 Q 是 P95 延遲低於 800ms，結案時我會附上 Grafana 壓測報告連結作為 T 佐證。\n"
+        "陳經理 (客服營運部)：客服 SOP 手冊更新由我擔任最終當責者 (A)，張專員與李專員負責執行 (R)，"
+        "預計下週三前完成 20 題常見問題演練，預算為 0 元內部工時，完成後會提交教育訓練簽到表與測驗結果連結。\n"
+        "主席 (林總監 - 產品部)：另外跨部門客戶滿意度追蹤機制請大家一起支援，但目前還沒指定誰是唯一當責者 A，請先列為待辦事項並標記管理缺口。"
+    )
+
     if not resolved_key:
-        demo_transcript = (
-            f"【音訊模擬轉譯逐字稿 - 檔案：{filename}（未偵測到 GEMINI_API_KEY，已啟用本地離線模擬轉譯）】\n"
-            "主席 (林總監 - 產品部)：各位同仁好，今天針對本季產品上市與跨部門交付召開同步會議。\n"
-            "王工程師 (AI 研發部)：目前模型推論 API 已經完成壓測，由我當責 (A) 在本週五前完成正式環境部署，"
-            "驗收條件 Q 是 P95 延遲低於 800ms，結案時我會附上 Grafana 壓測報告連結作為 T 佐證。\n"
-            "陳經理 (客服營運部)：客服 SOP 手冊更新由我擔任最終當責者 (A)，張專員與李專員負責執行 (R)，"
-            "預計下週三前完成 20 題常見問題演練，預算為 0 元內部工時，完成後會提交教育訓練簽到表與測驗結果連結。\n"
-            "主席 (林總監 - 產品部)：另外跨部門客戶滿意度追蹤機制請大家一起支援，但目前還沒指定誰是唯一當責者 A，請先列為待辦事項並標記管理缺口。"
-        )
         return (
             demo_transcript,
             False,
@@ -100,10 +101,14 @@ def transcribe_audio(
         )
         text = (response.text or "").strip()
         if not text:
-            return "", True, "⚠️ Gemini 音訊轉譯回傳空白內容，請確認音訊檔案是否清晰。"
+            return demo_transcript, False, "⚠️ Gemini 音訊轉譯回傳空白內容，已自動切換模擬逐字稿供預覽。"
         return text, True, f"✅ 已透過 Google Gemini ({model_name}) 完成音訊多模態逐字稿轉譯！"
     except Exception as exc:
-        return "", False, f"❌ Gemini 音訊轉譯發生錯誤：{exc}"
+        return (
+            demo_transcript,
+            False,
+            f"⚠️ Gemini 音訊轉譯連線受限或金鑰異常（{exc}），已自動切換本地模擬逐字稿，確保兩階段工作流不中斷。",
+        )
 
 
 def _fallback_rule_based_extraction(transcript: str) -> MeetingExtractionSchema:
@@ -265,7 +270,7 @@ def extract_meeting_from_transcript(
     if not cleaned_transcript:
         raise ValueError("會議逐字稿內容不可為空白。")
 
-    resolved_key = (api_key or get_gemini_api_key()).strip()
+    resolved_key = (api_key if api_key is not None else get_gemini_api_key()).strip()
     model_name = get_gemini_model()
 
     if not resolved_key:
@@ -339,7 +344,7 @@ def audit_action_evidence(
             False,
         )
 
-    resolved_key = (api_key or get_gemini_api_key()).strip()
+    resolved_key = (api_key if api_key is not None else get_gemini_api_key()).strip()
     model_name = get_gemini_model()
 
     if resolved_key:

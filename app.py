@@ -14,6 +14,7 @@ import streamlit as st
 from src.repositories.meeting_repo import MeetingRepository
 from src.ui.deployment_view import render_deployment_view
 from src.ui.extraction_view import render_extraction_view
+from src.ui.guide_view import render_guide_view
 from src.ui.meetings_view import render_meetings_view
 from src.ui.notification_view import render_notification_view
 from src.ui.sidebar import render_sidebar
@@ -46,14 +47,15 @@ def main() -> None:
         st.info("🔒 請先於左側邊欄輸入正確的「企業內部工作區通行碼」以檢視與管理會議記錄。")
         return
 
-    # 五大核心功能工作台 Tabs
-    tab_extract, tab_history, tab_tracker, tab_notify, tab_deploy = st.tabs(
+    # 六大核心功能工作台 Tabs
+    tab_extract, tab_history, tab_tracker, tab_notify, tab_deploy, tab_guide = st.tabs(
         [
             "🎙️ 1. 新增會議 & AI 結構化萃取",
             "📚 2. 歷史會議檢索 & 任務佐證更新",
             "📊 3. 全域行動方案追蹤看板 (Global Action Tracker)",
             "🔔 4. 跨部門主動催辦與通知中心",
             "☁️ 5. 雲端部署與系統自檢中心",
+            "📖 6. 新手教學與操作指南",
         ]
     )
 
@@ -71,6 +73,9 @@ def main() -> None:
 
     with tab_deploy:
         render_deployment_view(repo)
+
+    with tab_guide:
+        render_guide_view()
 
 
 if __name__ == "__main__":

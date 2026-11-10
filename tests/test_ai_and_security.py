@@ -72,6 +72,9 @@ def test_zero_hardcoded_api_keys_security_scan() -> None:
     for path in PROJECT_ROOT.rglob("*"):
         if ".venv" in path.parts or ".git" in path.parts or "__pycache__" in path.parts:
             continue
+        # .env 與 .streamlit/secrets.toml 為被 .gitignore 排除之本地機密檔，不屬於入庫原始碼
+        if path.name in {".env", "secrets.toml"}:
+            continue
         if path.is_file() and path.suffix in {".py", ".sql", ".toml", ".md", ".example"}:
             content = path.read_text(encoding="utf-8", errors="ignore")
             assert not gemini_key_pattern.search(content), f"在 {path} 偵測到疑似硬編碼之 Gemini API Key!"

@@ -18,6 +18,8 @@ def test_streamlit_app_end_to_end(tmp_path: Path, monkeypatch) -> None:
     """執行 Streamlit AppTest 端到端自動化 UI 測試."""
     test_db = tmp_path / "e2e_ui_test.db"
     monkeypatch.setenv("LOCAL_DB_PATH", str(test_db))
+    monkeypatch.setenv("SUPABASE_URL", "offline-test")
+    monkeypatch.setenv("SUPABASE_KEY", "")
 
     app_path = Path(__file__).resolve().parent.parent / "app.py"
     at = AppTest.from_file(str(app_path), default_timeout=30)
@@ -51,6 +53,8 @@ def test_streamlit_action_item_evidence_closed_loop_and_tracker(tmp_path: Path, 
     """驗證 Tab 2 待辦事項 Done 狀態之 T (成果佐證) 卡控與 Tab 3 全域追蹤看板篩選互動."""
     test_db = tmp_path / "e2e_tracker_test.db"
     monkeypatch.setenv("LOCAL_DB_PATH", str(test_db))
+    monkeypatch.setenv("SUPABASE_URL", "offline-test")
+    monkeypatch.setenv("SUPABASE_KEY", "")
 
     app_path = Path(__file__).resolve().parent.parent / "app.py"
     at = AppTest.from_file(str(app_path), default_timeout=30)
@@ -96,3 +100,6 @@ def test_streamlit_action_item_evidence_closed_loop_and_tracker(tmp_path: Path, 
     at.button(key="btn_run_live_diagnostics").click().run()
     assert len(at.exception) == 0
     assert len(at.session_state.get("live_diag_results", [])) == 4
+
+    # (f) 驗證 Tab 6 新手教學與操作指南正常渲染無異常
+    assert any("新手教學與超簡單操作說明書" in m.value for m in at.markdown)
