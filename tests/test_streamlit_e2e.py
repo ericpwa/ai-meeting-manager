@@ -81,8 +81,12 @@ def test_streamlit_action_item_evidence_closed_loop_and_tracker(tmp_path: Path, 
     at.button(key=f"btn_save_act_{target_uid}").click().run()
     assert len(at.exception) == 0
 
-    # (c) 測試 Tab 3 全域行動方案追蹤看板篩選器
-    at.selectbox(key="trk_filter_health").select("⚠️ 僅顯示有治理缺口").run()
+    # (c) 測試 Tab 3 全域行動方案追蹤看板篩選器（四色燈號與治理狀態連動）
+    at.selectbox(key="trk_filter_health").select("🟡 黃燈：⚠️ 治理缺口").run()
+    assert len(at.exception) == 0
+    assert len(at.dataframe) >= 1
+
+    at.selectbox(key="trk_filter_health").select("🔴 紅燈（全部：逾期未完成＋執行受阻）").run()
     assert len(at.exception) == 0
     assert len(at.dataframe) >= 1
 

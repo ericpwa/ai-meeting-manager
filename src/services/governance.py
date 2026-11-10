@@ -185,6 +185,60 @@ def validate_done_transition(item: ActionItem, new_status: str, new_evidence: st
     return True, "✅ 已提供成果佐證 (T)，符合結案閉環要求。"
 
 
+def classify_action_traffic_light(
+    act: ActionItem,
+    reference_date: __import__("datetime").date | None = None,
+) -> tuple[str, str, str]:
+    """判定單一待辦事項之『燈號預警 (紅/黃/藍/綠燈)』與『🩺 治理與逾期狀態』分類.
+
+    規則對應：
+    1. 🔴 紅燈 — 🚨 逾期未完成 (status != Done 且 due_date < today)
+    2. 🔴 紅燈 — 🛑 執行受阻 (Blocked) (status == Blocked)
+    3. 🟡 黃燈 — ⚠️ 治理缺口 (存在 RACI/SMART/QCD+T 缺口)
+    4. 🟡 黃燈 — ⏳ 即將到期 (status != Done 且 0 <= 剩餘天數 <= 3)
+    5. 🔵 藍燈 — ⏳ 未完成/進行中 (status 為 Pending 或 In Progress，且無逾期/無缺口/非即將到期)
+    6. 🟢 綠燈 — ✅ 已完成 (Done) (status == Done 且無治理缺口)
+
+    回傳:
+        (traffic_light, governance_status, combined_badge)
+    """
+    import datetime as _dt
+
+    today = reference_date or _dt.date.today()
+    due_str = (act.due_date or "").strip()
+    days_delta: int | None = None
+
+    if re.match(r"^\d{4}-\d{2}-\d{2}$", due_str):
+        try:
+            due_dt = _dt.date.fromisoformat(due_str)
+            days_delta = (due_dt - today).days
+        except ValueError:
+            days_delta = None
+
+    # 1. 逾期未完成 -> 紅燈
+    if act.status != "Done" and days_delta is not None and days_delta < 0:
+        return "🔴 紅燈", "🚨 逾期未完成", "🔴 紅燈｜🚨 逾期未完成"
+
+    # 2. 執行受阻 (Blocked) -> 紅燈
+    if act.status == "Blocked":
+        return "🔴 紅燈", "🛑 執行受阻 (Blocked)", "🔴 紅燈｜🛑 執行受阻 (Blocked)"
+
+    # 3. 治理缺口 -> 黃燈
+    if act.governance_gaps:
+        return "🟡 黃燈", "⚠️ 治理缺口", "🟡 黃燈｜⚠️ 治理缺口"
+
+    # 4. 即將到期 (3日內) -> 黃燈
+    if act.status != "Done" and days_delta is not None and 0 <= days_delta <= 3:
+        return "🟡 黃燈", "⏳ 即將到期", "🟡 黃燈｜⏳ 即將到期"
+
+    # 5. 未完成/進行中 -> 藍燈
+    if act.status != "Done":
+        return "🔵 藍燈", "⏳ 未完成/進行中", "🔵 藍燈｜⏳ 未完成/進行中"
+
+    # 6. 已完成 (Done) -> 綠燈
+    return "🟢 綠燈", "✅ 已完成 (Done)", "🟢 綠燈｜✅ 已完成 (Done)"
+
+
 def compute_governance_metrics(meetings: Iterable[MeetingRecord]) -> dict[str, int | float]:
     """計算跨會議之全域管理指標 (供 Global Action Tracker 儀表板使用)."""
     total_meetings = 0

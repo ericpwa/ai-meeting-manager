@@ -14,6 +14,12 @@ from src.config import (
     mask_secret,
 )
 from src.repositories.meeting_repo import MeetingRepository
+from src.services.org_directory_service import (
+    generate_sample_roster_csv,
+    generate_sample_roster_md,
+    generate_sample_roster_xlsx,
+    parse_organization_upload,
+)
 
 
 def render_sidebar(repo: MeetingRepository) -> bool:
@@ -115,7 +121,57 @@ def render_sidebar(repo: MeetingRepository) -> bool:
         else:
             st.caption(f"📁 本地資料庫：`{repo.db_path.name}`")
 
-        # 4. 範例資料一鍵管理
+        # 4. 企業部門與與會人員批量匯入中心
+        st.divider()
+        st.markdown("### 👥 部門與人員名冊批量匯入")
+        org_depts, org_persons = repo.get_org_directory(include_from_meetings=True)
+        st.caption(
+            f"目前已納管：**{len(org_depts)} 個部門** ｜ **{len(org_persons)} 位人員**\n"
+            "（自動對應「👑 當責者 A」、「🛠️ 執行者 R」與「🏢 部門」篩選選單）"
+        )
+        uploaded_roster = st.file_uploader(
+            "上傳名冊 (.xlsx / .csv / .md)",
+            type=["xlsx", "csv", "md"],
+            key="sidebar_roster_uploader",
+            help="支援含『部門名稱』與『與會人員』欄位的 Excel、CSV 或 Markdown 檔案。",
+        )
+        if uploaded_roster is not None:
+            if st.button("📥 執行批量匯入名冊", type="primary", key="btn_sidebar_import_roster"):
+                depts_in, persons_in, msg = parse_organization_upload(
+                    uploaded_roster.getvalue(),
+                    uploaded_roster.name,
+                )
+                if depts_in or persons_in:
+                    repo.save_org_directory(depts_in, persons_in, merge=True)
+                    st.success(msg)
+                    st.rerun()
+                else:
+                    st.warning(msg)
+
+        with st.expander("📥 下載名冊匯入範本 (.xlsx/.csv/.md)", expanded=False):
+            st.download_button(
+                "📊 下載 Excel 範本 (.xlsx)",
+                data=generate_sample_roster_xlsx(),
+                file_name="org_roster_template.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key="dl_tpl_xlsx_sb",
+            )
+            st.download_button(
+                "📄 下載 CSV 範本 (.csv)",
+                data=generate_sample_roster_csv(),
+                file_name="org_roster_template.csv",
+                mime="text/csv",
+                key="dl_tpl_csv_sb",
+            )
+            st.download_button(
+                "📝 下載 Markdown 範本 (.md)",
+                data=generate_sample_roster_md(),
+                file_name="org_roster_template.md",
+                mime="text/markdown",
+                key="dl_tpl_md_sb",
+            )
+
+        # 5. 範例資料一鍵管理
         st.divider()
         st.markdown("### 📦 範例資料與快速體驗")
         if st.button("🌱 重新載入跨部門範例會議", key="btn_seed_samples"):

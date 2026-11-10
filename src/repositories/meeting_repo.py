@@ -26,6 +26,8 @@ from src.schemas.models import (
 )
 from src.services.governance import audit_action_item_governance, audit_meeting_extraction, validate_done_transition
 
+ORG_DIRECTORY_RECORD_ID = "00000000-0000-0000-0000-000000000099"
+
 
 def get_sample_meetings() -> list[MeetingRecord]:
     """產出預載之跨部門真實感範例會議記錄 (含 RACI / SMART / QCD+T 與治理缺口示範)."""
@@ -555,6 +557,9 @@ class MeetingRepository:
 
         filtered: list[MeetingRecord] = []
         for rec in records:
+            if rec.id == ORG_DIRECTORY_RECORD_ID or rec.source_type == "org_directory":
+                continue
+
             if query:
                 searchable_blob = " ".join(
                     [
@@ -661,3 +666,78 @@ class MeetingRepository:
             cur = conn.execute("DELETE FROM meetings WHERE id = ?", (meeting_id,))
             conn.commit()
             return cur.rowcount > 0
+
+    def get_org_directory(self, include_from_meetings: bool = True) -> tuple[list[str], list[str]]:
+        """取得企業部門名稱清單與與會人員（當責者 A / 執行者 R 候選）名冊."""
+        depts: list[str] = []
+        persons: list[str] = []
+
+        dir_rec = self.get_meeting_by_id(ORG_DIRECTORY_RECORD_ID)
+        if dir_rec is not None:
+            for d in dir_rec.departments:
+                if d.strip() and d.strip() not in depts:
+                    depts.append(d.strip())
+            for p in dir_rec.attendees:
+                if p.strip() and p.strip() not in persons:
+                    persons.append(p.strip())
+
+        if include_from_meetings:
+            for m in self.list_meetings():
+                for d in m.departments:
+                    if d.strip() and d.strip() not in depts:
+                        depts.append(d.strip())
+                for p in m.attendees:
+                    if p.strip() and p.strip() not in persons:
+                        persons.append(p.strip())
+                for act in m.action_items:
+                    if act.department.strip() and act.department.strip() not in depts:
+                        depts.append(act.department.strip())
+                    if act.raci.accountable.strip() and act.raci.accountable.strip() not in persons:
+                        persons.append(act.raci.accountable.strip())
+                    for r in act.raci.responsible:
+                        if r.strip() and r.strip() not in persons:
+                            persons.append(r.strip())
+
+        return sorted(depts), sorted(persons)
+
+    def save_org_directory(
+        self,
+        new_departments: list[str],
+        new_attendees: list[str],
+        merge: bool = True,
+    ) -> tuple[list[str], list[str]]:
+        """儲存或合併批量匯入之『部門名稱』與『與會人員』至雙模資料庫 (Supabase JSONB + SQLite)."""
+        existing_depts: list[str] = []
+        existing_persons: list[str] = []
+
+        if merge:
+            dir_rec = self.get_meeting_by_id(ORG_DIRECTORY_RECORD_ID)
+            if dir_rec is not None:
+                existing_depts = list(dir_rec.departments)
+                existing_persons = list(dir_rec.attendees)
+
+        for d in new_departments:
+            cleaned_d = d.strip()
+            if cleaned_d and cleaned_d not in existing_depts:
+                existing_depts.append(cleaned_d)
+
+        for p in new_attendees:
+            cleaned_p = p.strip()
+            if cleaned_p and cleaned_p not in existing_persons:
+                existing_persons.append(cleaned_p)
+
+        directory_record = MeetingRecord(
+            id=ORG_DIRECTORY_RECORD_ID,
+            title="__SYSTEM_ORG_DIRECTORY__",
+            meeting_date="2026-01-01",
+            departments=existing_depts,
+            attendees=existing_persons,
+            executive_summary="系統組織部門與與會人員標準名冊主檔",
+            key_decisions=[],
+            action_items=[],
+            raw_transcript="",
+            source_type="org_directory",
+            workspace_id="internal-default",
+        )
+        self.save_meeting(directory_record, source_type="org_directory")
+        return existing_depts, existing_persons

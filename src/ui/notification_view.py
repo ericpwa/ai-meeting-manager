@@ -74,7 +74,9 @@ def render_notification_view(repo: MeetingRepository) -> None:
 
     st.markdown("#### ✉️ 催辦訊息產生器 & Webhook 自動推播工作台")
 
-    accountable_options = ["全體當責人 (跨部門總表)"] + [g.accountable for g in groups]
+    _, org_persons = repo.get_org_directory(include_from_meetings=True)
+    merged_accountables = list(dict.fromkeys([g.accountable for g in groups] + org_persons))
+    accountable_options = ["全體當責人 (跨部門總表)"] + merged_accountables
     urgency_options = [
         "全部待催辦項目",
         "🚨 僅逾期與受阻項目 (高優先級)",

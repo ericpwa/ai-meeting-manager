@@ -59,7 +59,8 @@ def render_meetings_view(repo: MeetingRepository) -> None:
     )
 
     all_meetings = repo.list_meetings()
-    all_depts: set[str] = set()
+    org_depts, _ = repo.get_org_directory(include_from_meetings=True)
+    all_depts: set[str] = set(org_depts)
     for m in all_meetings:
         for d in m.departments:
             all_depts.add(d)
