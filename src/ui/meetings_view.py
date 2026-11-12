@@ -9,6 +9,7 @@ from src.repositories.meeting_repo import MeetingRepository
 from src.schemas.models import ActionItem, MeetingRecord
 from src.services.ai_service import audit_action_evidence
 from src.services.governance import classify_action_traffic_light
+from src.ui.theme import render_action_governance_strip
 
 
 def _export_meeting_markdown(meeting: MeetingRecord) -> str:
@@ -155,7 +156,7 @@ def render_meetings_view(repo: MeetingRepository) -> None:
 def _render_action_item_card(repo: MeetingRepository, meeting: MeetingRecord, act: ActionItem) -> None:
     """渲染單一待辦事項之互動管理卡片（含四色燈號預警、快速勾選 Done、T 佐證閉環與 AI 稽核）."""
     uid = f"{meeting.id}_{act.id}"
-    _, _, combined_light = classify_action_traffic_light(act)
+    light_color, gov_status, combined_light = classify_action_traffic_light(act)
     status_icon = {
         "Done": "✅",
         "In Progress": "⏳",
@@ -180,6 +181,8 @@ def _render_action_item_card(repo: MeetingRepository, meeting: MeetingRecord, ac
                 key=f"chk_done_{uid}",
                 help="勾選後請確認下方已填寫 T (成果佐證)，再點擊『儲存更新』完成閉環。",
             )
+
+        render_action_governance_strip(act, light_color, gov_status)
 
         # 顯示管理缺口警示
         if act.governance_gaps:

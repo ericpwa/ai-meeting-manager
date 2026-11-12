@@ -108,8 +108,12 @@ def test_streamlit_action_item_evidence_closed_loop_and_tracker(tmp_path: Path, 
     assert len(at.exception) == 0
     assert len(at.session_state.get("live_diag_results", [])) == 6
 
-    # (f) 驗證 Tab 6 新手教學與操作指南正常渲染無異常，且與 Tab 1~Tab 5 關鍵功能一致
+    # (f) 驗證 Tab 6 新手教學與操作指南正常渲染無異常，且與 Tab 1~Tab 5 關鍵功能與企業 UI 主題一致
     md_blob = "\n".join(m.value for m in at.markdown)
     assert "新手教學與超簡單操作說明書" in md_blob
     assert "會議輸入格式公版" in md_blob
     assert "四色「燈號預警」" in md_blob
+    assert "銓泰環能科技" in md_blob
+    assert "inpower-hero-card" in md_blob
+    assert "neon-traffic-grid" in md_blob
+    assert "inp-action-strip" in md_blob

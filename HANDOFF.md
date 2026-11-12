@@ -46,7 +46,8 @@
 │   ├── repositories/
 │   │   └── meeting_repo.py                 # 雙模儲存庫：Supabase Cloud 優先 + Local SQLite 自動無縫降級備援 + 組織名冊持久化
 │   └── ui/
-│       ├── sidebar.py                      # 左側邊欄：BYOK 金鑰注入 (AQ/AIza/Alza)、資料庫狀態、部門/人員名冊批量匯入、範例載入
+│       ├── theme.py                        # 企業視覺主題：INPOWER 銓泰環能科技 SVG Logo、藍白灰玻璃擬態、霓虹四色燈號與結構化徽章
+│       ├── sidebar.py                      # 左側邊欄：BYOK 金鑰注入 (AQ/AIza/Alza)、模組化狀態卡、部門/人員名冊批量匯入、範例載入
 │       ├── extraction_view.py              # Tab 1：新增會議 & AI 結構化萃取（含下載/上傳 .xlsx/.csv/.txt/.md 輸入格式公版）
 │       ├── meetings_view.py                # Tab 2：歷史會議檢索、四色燈號卡片、A/R 更新、T 成果佐證閉環與 AI 稽核
 │       ├── tracker_view.py                 # Tab 3：全域行動方案追蹤看板（批量匯入名冊對應 A/R/部門選單 ＋ 紅/黃/藍/綠四色燈號預警）
@@ -82,6 +83,9 @@
      - **🟡 黃燈**：`⚠️ 治理缺口`、`⏳ 即將到期`（3 日內）
      - **🔵 藍燈**：`⏳ 未完成/進行中`
      - **🟢 綠燈**：`✅ 已完成 (Done)`
+6. **🎨 INPOWER 銓泰環能科技企業級 UI 美化升級（[`src/ui/theme.py`](file:///Users/wenanpan/.gemini/antigravity/scratch/ai-meeting-manager/src/ui/theme.py)）**：
+   - 融合 **INPOWER 銓泰環能科技** 企業 Logo 與制服三層波浪色系（純白、深海藏青 `#162238`、寶石鋼藍 `#1E4E79`、金屬銀灰 `#94A3B8`）。
+   - 頂部漸層商務橫幅 (Hero Header Card)、膠囊分段式六大頁籤導覽列 (Segmented Pill Tabs)、圓角立體色帶 KPI 指標卡、霓虹微光四色燈號預警列、待辦事項左側四色燈條與 RACI/SMART/QCD+T 結構化彩色膠囊徽章、以及側邊欄模組化玻璃擬態狀態卡。
 
 ---
 

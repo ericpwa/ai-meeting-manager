@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import streamlit as st
 
+from src.config import get_gemini_model
 from src.repositories.meeting_repo import MeetingRepository
 from src.ui.deployment_view import render_deployment_view
 from src.ui.extraction_view import render_extraction_view
@@ -18,16 +19,20 @@ from src.ui.guide_view import render_guide_view
 from src.ui.meetings_view import render_meetings_view
 from src.ui.notification_view import render_notification_view
 from src.ui.sidebar import render_sidebar
+from src.ui.theme import inject_corporate_theme, render_corporate_hero_header
 from src.ui.tracker_view import render_tracker_view
 
 
 def main() -> None:
     st.set_page_config(
-        page_title="AI 會議記錄管理 Web App | RACI · SMART · QCD+T",
+        page_title="AI 會議記錄管理 Web App | INPOWER 銓泰環能科技 · RACI · SMART · QCD+T",
         page_icon="🛡️",
         layout="wide",
         initial_sidebar_state="expanded",
     )
+
+    # 注入『INPOWER 銓泰環能科技』藍白灰企業色 ＋ 霓虹微光四色燈號 ＋ 玻璃擬態卡片全域主題
+    inject_corporate_theme()
 
     # 初始化雙模儲存引擎並確保預載跨部門範例會議資料
     repo = MeetingRepository()
@@ -36,11 +41,15 @@ def main() -> None:
     # 渲染側邊欄 (BYOK 金鑰管理 + 儲存狀態 + 工作區通行碼檢查)
     is_unlocked = render_sidebar(repo)
 
-    # 頁面主標題區
+    # 頁面主標題與企業漸層商務橫幅 (Hero Header Card)
+    meetings_list = repo.list_meetings()
+    total_actions_cnt = sum(len(m.action_items) for m in meetings_list)
     st.title("🛡️ AI 會議記錄管理 Web App")
-    st.markdown(
-        "**企業級會議治理中樞**：透過 **Google Gemini Structured Outputs** 自動萃取決策與行動方案，"
-        "深度落實 **RACI 單一當責制**、**SMART 四階目標分層** 與 **QCD+T 真實性成果佐證閉環**。"
+    render_corporate_hero_header(
+        storage_mode_label=repo.storage_mode_label,
+        active_model=get_gemini_model(),
+        total_meetings=len(meetings_list),
+        total_actions=total_actions_cnt,
     )
 
     if not is_unlocked:

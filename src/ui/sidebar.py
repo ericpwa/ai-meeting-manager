@@ -23,13 +23,18 @@ from src.services.org_directory_service import (
     generate_sample_roster_xlsx,
     parse_organization_upload,
 )
+from src.ui.theme import get_inpower_logo_svg, render_sidebar_status_card
 
 
 def render_sidebar(repo: MeetingRepository) -> bool:
     """渲染左側資安與管理控制欄，並回傳當前使用者是否已通過選用之工作區通行碼驗證."""
     with st.sidebar:
+        st.markdown(
+            f'<div style="display:flex;justify-content:center;margin-bottom:6px;">{get_inpower_logo_svg(width=235, height=86, compact=True)}</div>',
+            unsafe_allow_html=True,
+        )
         st.markdown("## 🛡️ Antigravity 會議治理中心")
-        st.caption("Phase 1 企業內部 0 元方案 · 邁向 Phase 2 SaaS")
+        st.caption("INPOWER 銓泰環能科技 · Phase 1 企業內部 0 元方案")
 
         st.divider()
 
@@ -120,25 +125,28 @@ def render_sidebar(repo: MeetingRepository) -> bool:
 
         st.divider()
 
-        # 3. 系統儲存模式與健康度診斷
+        # 3. 系統儲存模式與健康度診斷（模組化狀態卡）
         st.markdown("### 🩺 系統儲存與治理狀態")
-        st.markdown(f"**儲存模式**：{repo.storage_mode_label}")
+        supa_url, _ = get_supabase_credentials()
+        endpoint_sub = f"雲端端點：{supa_url}" if is_supabase_configured() else f"本地資料庫：{repo.db_path.name}"
+        render_sidebar_status_card(
+            title="雙模資料庫連線狀態",
+            value=repo.storage_mode_label,
+            subtitle=endpoint_sub,
+            accent_color="#10B981" if repo.is_cloud_mode else "#2563EB",
+        )
         if repo.last_error:
             st.caption(f"⚠️ 備援提示：{repo.last_error}")
 
-        supa_url, _ = get_supabase_credentials()
-        if is_supabase_configured():
-            st.caption(f"🌐 雲端端點：`{supa_url}`")
-        else:
-            st.caption(f"📁 本地資料庫：`{repo.db_path.name}`")
-
-        # 4. 企業部門與與會人員批量匯入中心
+        # 4. 企業部門與與會人員批量匯入中心（模組化狀態卡）
         st.divider()
         st.markdown("### 👥 部門與人員名冊批量匯入")
         org_depts, org_persons = repo.get_org_directory(include_from_meetings=True)
-        st.caption(
-            f"目前已納管：**{len(org_depts)} 個部門** ｜ **{len(org_persons)} 位人員**\n"
-            "（自動對應「👑 當責者 A」、「🛠️ 執行者 R」與「🏢 部門」篩選選單）"
+        render_sidebar_status_card(
+            title="組織名冊納管統計",
+            value=f"🏢 {len(org_depts)} 個部門 ｜ 👥 {len(org_persons)} 位人員",
+            subtitle="自動對應 A 當責 / R 執行 / 部門篩選選單",
+            accent_color="#1E4E79",
         )
         uploaded_roster = st.file_uploader(
             "上傳名冊 (.xlsx / .csv / .md)",

@@ -25,6 +25,7 @@ from src.services.org_directory_service import (
     generate_sample_roster_xlsx,
     parse_organization_upload,
 )
+from src.ui.theme import render_traffic_light_neon_strip
 
 
 def _style_traffic_light_cell(val: object) -> str:
@@ -161,6 +162,9 @@ def render_tracker_view(repo: MeetingRepository) -> None:
     if not rows:
         st.info("目前尚無行動方案資料。")
         return
+
+    # 2.5 四色霓虹微光燈號預警看板
+    render_traffic_light_neon_strip(light_counts)
 
     # 3. 多維度交叉篩選器（包含批量匯入之部門與人員名冊，以及呼應四色燈號之治理狀態選單）
     f1, f2, f3, f4, f5 = st.columns(5)

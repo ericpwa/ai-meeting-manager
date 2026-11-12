@@ -23,6 +23,7 @@ from src.services.meeting_template_service import (
     generate_meeting_template_xlsx,
     parse_uploaded_meeting_file,
 )
+from src.ui.theme import render_action_governance_strip
 
 SAMPLE_TRANSCRIPT_TEMPLATE = """會議名稱：2026 Q4 跨部門 AI 客服知識庫上線與資安驗收會議
 會議日期：2026-11-10
@@ -313,12 +314,13 @@ def _render_extraction_preview_and_save(
     status_options = ["Pending", "In Progress", "Blocked", "Done"]
 
     for idx, item in enumerate(extraction.action_items):
-        _, _, combined_light_badge = classify_action_traffic_light(item)
+        light_color, gov_status, combined_light_badge = classify_action_traffic_light(item)
         gap_badge = f" ⚠️ ({len(item.governance_gaps)} 項治理缺口)" if item.governance_gaps else " ✅ (治理合規)"
         with st.expander(
             f"【{item.id}】{combined_light_badge} ｜ {item.task_title} ｜ 當責者(A)：{item.raci.accountable} ｜ 期限：{item.due_date}{gap_badge}",
             expanded=True,
         ):
+            render_action_governance_strip(item, light_color, gov_status)
             if item.governance_gaps:
                 for g in item.governance_gaps:
                     st.warning(g)
