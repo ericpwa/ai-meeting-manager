@@ -7,6 +7,7 @@ import streamlit as st
 from src.config import (
     SUPPORTED_GEMINI_MODELS,
     get_gemini_api_key,
+    get_gemini_key_type_label,
     get_gemini_model,
     get_supabase_credentials,
     get_webhook_url,
@@ -55,20 +56,21 @@ def render_sidebar(repo: MeetingRepository) -> bool:
         current_gemini_key = get_gemini_api_key()
         if current_gemini_key:
             if is_valid_gemini_key_format(current_gemini_key):
-                st.success(f"Gemini API Key 已就緒 (`{mask_secret(current_gemini_key)}`)")
+                key_label = get_gemini_key_type_label(current_gemini_key)
+                st.success(f"Gemini API Key 已就緒 ({key_label}：`{mask_secret(current_gemini_key)}`)")
             else:
                 st.warning(
-                    f"⚠️ 偵測到非標準格式金鑰 (`{mask_secret(current_gemini_key)}`)。Google AI Studio 金鑰應以 `AIza` 開頭，系統將自動啟用本地規則備援以確保零中斷。"
+                    f"⚠️ 偵測到非標準格式金鑰 (`{mask_secret(current_gemini_key)}`)。支援 `AQ...` 授權金鑰與 `AIza...` / `Alza...` 流量金鑰，系統將自動啟用本地規則備援以確保零中斷。"
                 )
         else:
             st.info("尚未於 `.env` / `st.secrets` 偵測到 Gemini Key，可於下方動態注入 (BYOK) 或使用本地規則引擎體驗。")
 
         byok_gemini = st.text_input(
-            "🔑 Google Gemini API Key (BYOK)",
+            "🔑 Google Gemini API Key (BYOK — 支援 AQ 與 AIza/Alza)",
             value=st.session_state.get("byok_gemini_api_key", ""),
             type="password",
-            placeholder="貼上 AIza... 金鑰 (僅存於當前記憶體)",
-            help="資安鐵律：動態注入之金鑰僅保存在您當前的瀏覽器 Session 記憶體中，絕不寫入程式碼或磁碟。",
+            placeholder="貼上 AQ... 或 AIza... / Alza... 金鑰 (僅存於當前記憶體)",
+            help="資安鐵律：支援 Google 最新 AQ 開頭授權金鑰與 AIza / Alza 開頭流量金鑰，動態注入之金鑰僅保存在當前瀏覽器記憶體中。",
         )
         if byok_gemini.strip():
             st.session_state["byok_gemini_api_key"] = byok_gemini.strip()

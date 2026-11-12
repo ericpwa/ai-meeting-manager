@@ -20,6 +20,7 @@ def test_streamlit_app_end_to_end(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("LOCAL_DB_PATH", str(test_db))
     monkeypatch.setenv("SUPABASE_URL", "offline-test")
     monkeypatch.setenv("SUPABASE_KEY", "")
+    monkeypatch.setenv("GEMINI_API_KEY", "AQ.DummyTestAuthKeyForCI1234567890")
 
     app_path = Path(__file__).resolve().parent.parent / "app.py"
     at = AppTest.from_file(str(app_path), default_timeout=30)
@@ -29,6 +30,8 @@ def test_streamlit_app_end_to_end(tmp_path: Path, monkeypatch) -> None:
     assert len(at.exception) == 0, f"Streamlit 渲染發生例外：{at.exception}"
     assert any("AI 會議記錄管理 Web App" in t.value for t in at.title)
     assert len(at.metric) >= 6
+    # 驗證側邊欄對於 AQ 開頭授權金鑰與 AIza/Alza 開頭流量金鑰均顯示綠色就緒狀態
+    assert any("Gemini API Key 已就緒" in s.value for s in at.sidebar.success)
 
     # 2. 測試在 Tab 1 點擊「📑 載入標準輸入公版範本」並執行精準萃取與入庫
     btn_load_tpl = at.button(key="btn_load_structured_template")

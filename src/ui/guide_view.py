@@ -92,10 +92,10 @@ def render_guide_view() -> None:
             """
             1. **打開申請網站**：點擊前往 👉 **[Google AI Studio 免費金鑰申請頁面](https://aistudio.google.com/app/apikey)**，用你的 Gmail 帳號登入。
             2. **點擊藍色按鈕**：點擊畫面上的 **「Create API key（建立 API 金鑰）」**，若詢問專案可直接點選建立於新專案。
-            3. **複製密碼**：等 3 秒鐘，畫面會出現一串 **`AIzaSy...`** 開頭的密碼，點擊旁邊的 **「Copy（複製）」**。
+            3. **複製密碼**：等 3 秒鐘，畫面會出現一串 **`AQ...`（新版安全授權金鑰）** 或 **`AIza...` / `Alza...`（傳統流量金鑰）** 開頭的密碼，點擊旁邊的 **「Copy（複製）」**。
             4. **貼回我們網站左邊**：
-               - 看畫面**最左邊的側邊欄**，找到 **「🔑 Google Gemini API Key (BYOK)」** 格子。
-               - 把剛剛複製的 `AIzaSy...` 貼進去並按鍵盤 **`Enter`**。
+               - 看畫面**最左邊的側邊欄**，找到 **「🔑 Google Gemini API Key (BYOK — 支援 AQ 與 AIza/Alza)」** 格子。
+               - 把剛剛複製的 `AQ...` 或 `AIza...` 貼進去並按鍵盤 **`Enter`**。
                - 看到綠色框框顯示 **「Gemini API Key 已就緒」** 就大功告成！
             """
         )

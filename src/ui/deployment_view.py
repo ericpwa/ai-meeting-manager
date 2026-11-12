@@ -16,6 +16,7 @@ from src.config import (
     SUPPORTED_GEMINI_MODELS,
     get_candidate_gemini_models,
     get_gemini_api_key,
+    get_gemini_key_type_label,
     get_gemini_model,
     get_supabase_credentials,
     get_webhook_url,
@@ -97,17 +98,17 @@ def run_live_system_diagnostics(repo: MeetingRepository) -> list[dict[str, str]]
     active_model = get_gemini_model()
     fallback_chain = get_candidate_gemini_models(active_model)
     if g_key and is_valid_gemini_key_format(g_key):
-        key_status = "✅ 已連線標準 AIza 金鑰"
+        key_status = f"✅ 已連線 ({get_gemini_key_type_label(g_key)})"
     elif g_key:
         key_status = "⚠️ 非標準金鑰格式 (已啟用本地規則備援)"
     else:
         key_status = "ℹ️ 本地規則備援模式 (可於側邊欄 BYOK 注入)"
     results.append(
         {
-            "查核項目": "4. Gemini 模型版本與多模型自動備援鏈",
+            "查核項目": "4. Gemini 模型版本與雙金鑰格式 (AQ / AIza) 支援",
             "目前模式": f"主模型: {active_model} (共 {len(SUPPORTED_GEMINI_MODELS)} 版本備援)",
             "狀態": key_status,
-            "詳細說明": f"備援順序：{' ➔ '.join(fallback_chain)} ｜ 金鑰：{mask_secret(g_key)}",
+            "詳細說明": f"相容 AQ 授權金鑰與 AIza/Alza 流量金鑰 ｜ 備援順序：{' ➔ '.join(fallback_chain)} ｜ 金鑰：{mask_secret(g_key)}",
         }
     )
 
@@ -223,7 +224,8 @@ def render_deployment_view(repo: MeetingRepository) -> None:
             """
         )
         secrets_template = (
-            'GEMINI_API_KEY = "AIzaSyYourRealGeminiKeyHere"\n'
+            '# 支援 AQ... (Google 授權金鑰) 與 AIza... / Alza... (Google 流量金鑰)\n'
+            'GEMINI_API_KEY = "AQ.YourGoogleAuthKey_or_AIzaSyYourKeyHere"\n'
             'GEMINI_MODEL = "gemini-2.5-flash"\n\n'
             'SUPABASE_URL = "https://your-project-id.supabase.co"\n'
             'SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."\n\n'

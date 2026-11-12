@@ -8,7 +8,9 @@ from pathlib import Path
 from src.config import (
     PROJECT_ROOT,
     SUPPORTED_GEMINI_MODELS,
+    build_genai_clients,
     get_candidate_gemini_models,
+    get_gemini_key_type_label,
     is_valid_gemini_key_format,
     mask_secret,
 )
@@ -106,4 +108,18 @@ def test_gemini_model_versions_and_fallback_chain() -> None:
     assert fallback_chain[0] == "gemini-2.5-flash"
 
     assert is_valid_gemini_key_format("AIzaSyDummyKeyForMaskTesting123456789") is True
-    assert is_valid_gemini_key_format("AQ.Ab8RN6Kzo3CxImmesCkeZgk") is False
+    assert is_valid_gemini_key_format("AlzaSyDummyKeyForMaskTesting123456789") is True
+    assert is_valid_gemini_key_format("AQ.DummyAuthKeyForUnitTesting1234567890") is True
+    assert is_valid_gemini_key_format("invalid-short-key") is False
+
+    assert "AQ" in get_gemini_key_type_label("AQ.DummyAuthKeyForUnitTesting1234567890")
+    assert "AIza" in get_gemini_key_type_label("AIzaSyDummyKeyForMaskTesting123456789")
+    assert "AIza" in get_gemini_key_type_label("AlzaSyDummyKeyForMaskTesting123456789")
+
+    aq_clients = build_genai_clients("AQ.DummyAuthKeyForUnitTesting1234567890")
+    assert len(aq_clients) >= 2
+    assert aq_clients[0][1] == "Vertex-Express(AQ)"
+
+    aiza_clients = build_genai_clients("AIzaSyDummyKeyForMaskTesting123456789")
+    assert len(aiza_clients) >= 2
+    assert aiza_clients[0][1] == "Gemini-API(AIza)"

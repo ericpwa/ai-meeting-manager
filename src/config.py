@@ -91,9 +91,50 @@ SUPPORTED_GEMINI_MODELS: list[str] = [
 
 
 def is_valid_gemini_key_format(api_key: str) -> bool:
-    """檢查 API Key 是否符合 Google AI Studio 標準金鑰格式 (以 AIza 開頭且長度合理)."""
+    """檢查 API Key 是否符合 Google 授權金鑰 (AQ 開頭) 或流量金鑰 (AIza / Alza 開頭) 標準格式."""
     cleaned = (api_key or "").strip()
-    return bool(cleaned.startswith("AIza") and len(cleaned) >= 30)
+    return bool(cleaned.startswith(("AQ", "AIza", "Alza")) and len(cleaned) >= 20)
+
+
+def get_gemini_key_type_label(api_key: str) -> str:
+    """識別並回傳 Google API Key 類型標籤（同時支援 AQ 授權金鑰與 AIza/Alza 流量金鑰）."""
+    cleaned = (api_key or "").strip()
+    if cleaned.startswith("AQ"):
+        return "Google 授權金鑰 (AQ)"
+    if cleaned.startswith(("AIza", "Alza")):
+        return "Google 流量金鑰 (AIza/Alza)"
+    return "自訂金鑰"
+
+
+def build_genai_clients(api_key: str) -> list[tuple[Any, str]]:
+    """根據金鑰前綴 (`AQ` vs `AIza`/`Alza`) 建立具備端點自動適配之 `genai.Client` 實例清單.
+
+    - `AQ` 開頭授權金鑰：優先使用 Vertex AI Express 授權端點 (`vertexai=True`)，並以 `vertexai=False` 為輔。
+    - `AIza` / `Alza` 開頭流量金鑰：優先使用 Gemini Developer API 端點 (`vertexai=False`)，若為 `Alza` 亦自動修正首字元 `l->I` 備援。
+    """
+    from google import genai
+
+    cleaned = (api_key or "").strip()
+    if not cleaned:
+        return []
+
+    key_variants = [cleaned]
+    if cleaned.startswith("Alza"):
+        normalized_aiza = "AIza" + cleaned[4:]
+        if normalized_aiza not in key_variants:
+            key_variants.append(normalized_aiza)
+
+    vertex_modes = [True, False] if cleaned.startswith("AQ") else [False, True]
+    clients: list[tuple[Any, str]] = []
+    for k_var in key_variants:
+        for v_mode in vertex_modes:
+            try:
+                client = genai.Client(api_key=k_var, vertexai=v_mode)
+                mode_label = "Vertex-Express(AQ)" if v_mode else "Gemini-API(AIza)"
+                clients.append((client, mode_label))
+            except Exception:
+                continue
+    return clients
 
 
 def get_gemini_api_key() -> str:
