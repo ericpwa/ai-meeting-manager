@@ -23,38 +23,41 @@ from src.schemas.models import ActionItem
 
 
 def get_inpower_logo_svg(width: int = 236, height: int = 92, compact: bool = False) -> str:
-    """產出『INPOWER 銓泰環能科技』高解析向量 SVG 企業 Logo（精準還原附圖胸口企業識別設計）."""
+    """產出『INPOWER 充霸』高解析向量 SVG 企業 Logo（精準對齊新版 JPEG 之 INPOWER 字距與『充 霸』字樣）."""
     uid = "inp_sb" if compact else "inp_hero"
-    return f"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 340 132" width="{width}" height="{height}" role="img" aria-label="INPOWER 銓泰環能科技">
+    return f"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 340 132" width="{width}" height="{height}" role="img" aria-label="INPOWER 充霸">
   <defs>
     <linearGradient id="{uid}_bg" x1="0%" y1="0%" x2="100%" y2="100%">
       <stop offset="0%" stop-color="#193759"/>
       <stop offset="52%" stop-color="#1E4E79"/>
       <stop offset="100%" stop-color="#286094"/>
     </linearGradient>
-    <linearGradient id="{uid}_metal" x1="0%" y1="0%" x2="0%" y2="100%">
+    <linearGradient id="{uid}_metal_in" x1="0%" y1="0%" x2="0%" y2="100%">
       <stop offset="0%" stop-color="#E2E8F0"/>
-      <stop offset="48%" stop-color="#CBD5E1"/>
-      <stop offset="100%" stop-color="#94A3B8"/>
+      <stop offset="100%" stop-color="#CBD5E1"/>
+    </linearGradient>
+    <linearGradient id="{uid}_metal_pw" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#F8FAFC"/>
+      <stop offset="100%" stop-color="#CBD5E1"/>
     </linearGradient>
     <linearGradient id="{uid}_top_arc" x1="0%" y1="50%" x2="100%" y2="50%">
       <stop offset="0%" stop-color="#EF4444"/>
       <stop offset="35%" stop-color="#F97316"/>
       <stop offset="68%" stop-color="#FACC15"/>
-      <stop offset="100%" stop-color="#4ADE80"/>
+      <stop offset="100%" stop-color="#22C55E"/>
     </linearGradient>
     <linearGradient id="{uid}_bot_arc" x1="100%" y1="50%" x2="0%" y2="50%">
-      <stop offset="0%" stop-color="#38BDF8"/>
-      <stop offset="42%" stop-color="#6366F1"/>
-      <stop offset="100%" stop-color="#F43F5E"/>
+      <stop offset="0%" stop-color="#0EA5E9"/>
+      <stop offset="45%" stop-color="#4F46E5"/>
+      <stop offset="100%" stop-color="#EC4899"/>
     </linearGradient>
     <radialGradient id="{uid}_orb_red" cx="70%" cy="28%" r="58%">
-      <stop offset="0%" stop-color="#FF5A5F"/>
+      <stop offset="0%" stop-color="#EF4444"/>
       <stop offset="55%" stop-color="#F97316" stop-opacity="0.78"/>
       <stop offset="100%" stop-color="#F97316" stop-opacity="0"/>
     </radialGradient>
     <radialGradient id="{uid}_orb_yel" cx="25%" cy="32%" r="58%">
-      <stop offset="0%" stop-color="#FEF08A"/>
+      <stop offset="0%" stop-color="#FDE047"/>
       <stop offset="58%" stop-color="#84CC16" stop-opacity="0.80"/>
       <stop offset="100%" stop-color="#22C55E" stop-opacity="0"/>
     </radialGradient>
@@ -67,30 +70,32 @@ def get_inpower_logo_svg(width: int = 236, height: int = 92, compact: bool = Fal
       <feDropShadow dx="0" dy="2" stdDeviation="2.2" flood-color="#0F172A" flood-opacity="0.45"/>
     </filter>
   </defs>
-  <!-- 企業制服口袋盾型底襯 (重現純白領口波浪 + 深海藏青色帶 + 寶石鋼藍底色) -->
+  <!-- 企業藍盾型底襯 -->
   <rect x="3" y="3" width="334" height="126" rx="18" fill="url(#{uid}_bg)" stroke="rgba(255,255,255,0.32)" stroke-width="1.5"/>
   <path d="M 3 22 Q 92 36 175 18 T 337 16 L 337 3 L 3 3 Z" fill="rgba(255,255,255,0.16)"/>
   <path d="M 3 30 Q 92 44 175 26 T 337 24 L 337 15 Q 250 10 175 20 T 3 20 Z" fill="rgba(22,34,56,0.55)"/>
-  <!-- 上方順時針漸層流線箭頭 (紅 -> 橙 -> 黃 -> 綠，由薄漸厚收於箭頭) -->
-  <path d="M 118 41 C 142 12, 198 10, 224 34 L 231 28 L 235 45 L 217 41 L 221 37 C 196 17, 145 19, 118 41 Z" fill="url(#{uid}_top_arc)" filter="url(#{uid}_glow)"/>
-  <!-- 下方順時針漸層流線箭頭 (藍 -> 靛紫 -> 珊瑚紅，由薄漸厚收於箭頭) -->
-  <path d="M 218 72 C 194 99, 138 101, 111 76 L 104 82 L 100 64 L 118 69 L 114 73 C 139 93, 191 91, 218 72 Z" fill="url(#{uid}_bot_arc)" filter="url(#{uid}_glow)"/>
-  <!-- IN 字樣 (大號銀灰金屬粗體) -->
-  <text x="26" y="72" font-family="'Inter', 'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="45" font-weight="900" letter-spacing="1" fill="url(#{uid}_metal)" filter="url(#{uid}_glow)">IN</text>
-  <!-- P 字樣 -->
-  <text x="110" y="70" font-family="'Inter', 'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="33" font-weight="800" fill="url(#{uid}_metal)" filter="url(#{uid}_glow)">P</text>
-  <!-- O 四色能量球體 (紅/黃/綠/藍 + 白色高光外環) -->
-  <g filter="url(#{uid}_glow)">
-    <circle cx="165" cy="56" r="18.5" fill="#22C55E"/>
-    <circle cx="165" cy="56" r="18.5" fill="url(#{uid}_orb_yel)"/>
-    <circle cx="165" cy="56" r="18.5" fill="url(#{uid}_orb_red)"/>
-    <circle cx="165" cy="56" r="18.5" fill="url(#{uid}_orb_blu)"/>
-    <circle cx="165" cy="56" r="18.5" fill="none" stroke="#FFFFFF" stroke-width="1.8" stroke-opacity="0.92"/>
+  <!-- 上方順時針漸層流線箭頭 (起自 P 左上方，跨越 O 球體，收於 W 上方) -->
+  <path d="M 126 41 C 145 13, 190 11, 211 33 L 217 27 L 222 44 L 204 40 L 208 36 C 188 18, 148 20, 126 41 Z" fill="url(#{uid}_top_arc)" filter="url(#{uid}_glow)"/>
+  <!-- 下方順時針漸層流線箭頭 (起自 W 下方，跨越 O 球體，收於 N-P 交界下方) -->
+  <path d="M 206 71 C 185 96, 139 98, 117 75 L 110 81 L 106 64 L 124 69 L 120 72 C 141 90, 182 88, 206 71 Z" fill="url(#{uid}_bot_arc)" filter="url(#{uid}_glow)"/>
+  <!-- IN 字樣 (100% 依新版 JPEG 幾何路徑繪製：含 N 右下斜切尖角，並緊貼 P 左側) -->
+  <g fill="url(#{uid}_metal_in)" filter="url(#{uid}_glow)">
+    <path d="M 66 29.5 H 76.5 V 69 H 66 Z"/>
+    <path d="M 83.7 29.5 H 92.2 L 106 51 V 29.5 H 115 V 73.5 L 92.7 48.5 V 69 H 83.7 Z"/>
   </g>
-  <!-- WER 字樣 -->
-  <text x="190" y="70" font-family="'Inter', 'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="33" font-weight="800" letter-spacing="1.2" fill="url(#{uid}_metal)" filter="url(#{uid}_glow)">WER</text>
-  <!-- 銓泰環能科技 白色標準字 -->
-  <text x="170" y="116" text-anchor="middle" font-family="'PingFang TC', 'Microsoft JhengHei', 'Noto Sans TC', sans-serif" font-size="20.5" font-weight="700" letter-spacing="5.5" fill="#FFFFFF" filter="url(#{uid}_glow)">銓泰環能科技</text>
+  <!-- P 字樣 (與 IN 緊湊相鄰，比照新版 JPEG 字距) -->
+  <text x="124" y="69" text-anchor="start" font-family="'Arial', 'Inter', 'Segoe UI', 'Helvetica Neue', sans-serif" font-size="37" font-weight="800" fill="url(#{uid}_metal_pw)" filter="url(#{uid}_glow)">P</text>
+  <!-- O 四色能量球體 (緊貼 P 與 WER 之間) -->
+  <g filter="url(#{uid}_glow)">
+    <circle cx="166" cy="55.5" r="17.5" fill="#22C55E"/>
+    <circle cx="166" cy="55.5" r="17.5" fill="url(#{uid}_orb_yel)"/>
+    <circle cx="166" cy="55.5" r="17.5" fill="url(#{uid}_orb_red)"/>
+    <circle cx="166" cy="55.5" r="17.5" fill="url(#{uid}_orb_blu)"/>
+  </g>
+  <!-- WER 字樣 (緊貼 O 球體右側) -->
+  <text x="187" y="69" text-anchor="start" font-family="'Arial', 'Inter', 'Segoe UI', 'Helvetica Neue', sans-serif" font-size="37" font-weight="800" letter-spacing="0.5" fill="url(#{uid}_metal_pw)" filter="url(#{uid}_glow)">WER</text>
+  <!-- 充 霸 標準字 (比照新版 JPEG 置於下方弧形箭頭正下方) -->
+  <text x="168" y="117" text-anchor="middle" font-family="'PingFang TC', 'Microsoft JhengHei', 'Noto Sans TC', sans-serif" font-size="23" font-weight="700" letter-spacing="7" fill="#FFFFFF" filter="url(#{uid}_glow)">充 霸</text>
 </svg>"""
 
 
