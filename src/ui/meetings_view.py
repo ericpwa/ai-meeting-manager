@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import pandas as pd
 import streamlit as st
 
 from src.repositories.meeting_repo import MeetingRepository
@@ -101,6 +102,11 @@ def render_meetings_view(repo: MeetingRepository) -> None:
 
     st.markdown(f"共找到 **{len(filtered_meetings)}** 場會議記錄：")
 
+    active_meeting_id = st.session_state.get("meetings_active_id")
+    filtered_ids = {m.id for m in filtered_meetings}
+    if active_meeting_id and active_meeting_id not in filtered_ids:
+        active_meeting_id = None
+
     for m_idx, meeting in enumerate(filtered_meetings):
         done_cnt = sum(1 for a in meeting.action_items if a.status == "Done")
         total_cnt = len(meeting.action_items)
@@ -112,7 +118,8 @@ def render_meetings_view(repo: MeetingRepository) -> None:
         else:
             badge_str += " ｜ ✅ 治理完整"
 
-        with st.expander(f"📌 {meeting.title} （{badge_str}）", expanded=(m_idx == 0)):
+        is_expanded = (meeting.id == active_meeting_id) if active_meeting_id else (m_idx == 0)
+        with st.expander(f"📌 {meeting.title} （{badge_str}）", expanded=is_expanded):
             meta_c1, meta_c2, meta_c3 = st.columns([2, 2, 1.5])
             with meta_c1:
                 st.markdown(f"**🏢 參與部門**：{', '.join(meeting.departments) or '未標註'}")
@@ -146,11 +153,126 @@ def render_meetings_view(repo: MeetingRepository) -> None:
                 st.markdown(f"{d_i}. {dec}")
 
             st.markdown("#### ✅ (d) 待辦事項管理 (RACI + SMART + QCD+T 狀態勾選與佐證閉環)")
+            if meeting.action_items:
+                _render_batch_quick_update_panel(repo, meeting)
+
             for act in meeting.action_items:
                 _render_action_item_card(repo, meeting, act)
 
             with st.expander("📄 檢視原始會議逐字稿", expanded=False):
                 st.text(meeting.raw_transcript or "（無原始逐字稿紀錄）")
+
+
+def _clear_meeting_card_widget_keys(meeting: MeetingRecord) -> None:
+    """批次或單筆更新完成後清除同場會議元件之舊暫存，確保批次表與單筆卡片 100% 同步不打架."""
+    st.session_state.pop(f"batch_editor_{meeting.id}", None)
+    prefixes = (
+        "chk_done_",
+        "sel_status_",
+        "inp_acc_",
+        "inp_resp_",
+        "inp_due_",
+        "inp_evidence_",
+    )
+    for act in meeting.action_items:
+        uid = f"{meeting.id}_{act.id}"
+        for p in prefixes:
+            st.session_state.pop(f"{p}{uid}", None)
+
+
+def _render_batch_quick_update_panel(repo: MeetingRepository, meeting: MeetingRecord) -> None:
+    """渲染本場會議之「⚡ 批次快速更新表格」（表單內連續修改多筆不重整頁面，最後一鍵批次儲存）."""
+    ok_key = f"batch_ok_{meeting.id}"
+    err_key = f"batch_err_{meeting.id}"
+    info_key = f"batch_info_{meeting.id}"
+
+    if ok_key in st.session_state:
+        st.success(st.session_state.pop(ok_key))
+    if info_key in st.session_state:
+        st.info(st.session_state.pop(info_key))
+    if err_key in st.session_state:
+        for err_msg in st.session_state.pop(err_key):
+            st.error(err_msg)
+
+    with st.container(border=True):
+        st.markdown("##### ⚡ 一鍵批次更新工作台（連續編輯多項任務不重整頁面，改完後按一次儲存）")
+        st.caption(
+            "💡 可直接在下表連續調整多筆任務之 **執行狀態**、**A (最終當責者)**、**R (實際執行者)**、**截止日 (D)** 與 **T (已提交成果佐證)**；"
+            "編輯過程完全不會跳頁重整，完成後點擊 **「⚡ 一鍵批次更新本場會議所有修改」** 即可一次寫入（改為 `Done` 仍嚴格檢核必填 T 佐證）。"
+        )
+
+        batch_rows = []
+        for act in meeting.action_items:
+            _, _, combined_light = classify_action_traffic_light(act)
+            batch_rows.append(
+                {
+                    "燈號預警": combined_light,
+                    "任務編號": act.id,
+                    "待辦事項名稱": act.task_title,
+                    "執行狀態": act.status,
+                    "A (最終當責者)": act.raci.accountable,
+                    "R (實際執行者)": ", ".join(act.raci.responsible),
+                    "截止日 (D)": act.due_date,
+                    "T (已提交成果佐證)": act.qcdt.evidence_submitted,
+                }
+            )
+        batch_df = pd.DataFrame(batch_rows)
+
+        with st.form(key=f"batch_update_form_{meeting.id}", clear_on_submit=False):
+            edited_batch_df = st.data_editor(
+                batch_df,
+                hide_index=True,
+                width="stretch",
+                height=min(420, 42 + 38 * max(len(batch_rows), 1)),
+                disabled=["燈號預警", "任務編號", "待辦事項名稱"],
+                column_config={
+                    "執行狀態": st.column_config.SelectboxColumn(
+                        "執行狀態",
+                        options=["Pending", "In Progress", "Blocked", "Done"],
+                        required=True,
+                    ),
+                    "T (已提交成果佐證)": st.column_config.TextColumn(
+                        "T (已提交成果佐證)",
+                        help="當執行狀態設為 Done 時必填具體成果佐證連結、單號或數據。",
+                    ),
+                },
+                key=f"batch_editor_{meeting.id}",
+            )
+            submitted = st.form_submit_button(
+                "⚡ 一鍵批次更新本場會議所有修改",
+                type="primary",
+            )
+
+        if submitted:
+            updates_payload = []
+            for row_idx, row in edited_batch_df.iterrows():
+                idx_int = int(row_idx)
+                updates_payload.append(
+                    {
+                        "item_index": idx_int,
+                        "action_id": str(row["任務編號"]).strip(),
+                        "status": str(row["執行狀態"]).strip(),
+                        "accountable": str(row["A (最終當責者)"]).strip(),
+                        "responsible": str(row["R (實際執行者)"]).strip(),
+                        "due_date": str(row["截止日 (D)"]).strip(),
+                        "evidence_submitted": str(row["T (已提交成果佐證)"]).strip(),
+                    }
+                )
+
+            updated_n, blocked_msgs, _ = repo.batch_update_meeting_action_items(
+                meeting_id=meeting.id,
+                updates=updates_payload,
+                enforce_evidence_on_done=True,
+            )
+            st.session_state["meetings_active_id"] = meeting.id
+            if updated_n > 0:
+                _clear_meeting_card_widget_keys(meeting)
+                st.session_state[ok_key] = f"✅ 已一鍵批次更新 {updated_n} 項待辦任務並同步寫入資料庫！（已自動鎖定展開本場會議）"
+            elif not blocked_msgs:
+                st.session_state[info_key] = "ℹ️ 未偵測到任何欄位修改，無須寫入資料庫。"
+            if blocked_msgs:
+                st.session_state[err_key] = blocked_msgs
+            st.rerun()
 
 
 def _render_action_item_card(repo: MeetingRepository, meeting: MeetingRecord, act: ActionItem) -> None:
@@ -269,6 +391,7 @@ def _render_action_item_card(repo: MeetingRepository, meeting: MeetingRecord, ac
             btn_c1, btn_c2 = st.columns([1.5, 2])
             with btn_c1:
                 if st.button("💾 儲存任務狀態與佐證更新", type="primary", key=f"btn_save_act_{uid}"):
+                    st.session_state["meetings_active_id"] = meeting.id
                     parsed_resp = [r.strip() for r in new_resp.split(",") if r.strip()]
                     ok, msg, _ = repo.update_action_item(
                         meeting_id=meeting.id,
@@ -283,6 +406,7 @@ def _render_action_item_card(repo: MeetingRepository, meeting: MeetingRecord, ac
                         enforce_evidence_on_done=True,
                     )
                     if ok:
+                        st.session_state.pop(f"batch_editor_{meeting.id}", None)
                         st.toast(msg, icon="✅")
                         st.rerun()
                     else:
@@ -290,6 +414,7 @@ def _render_action_item_card(repo: MeetingRepository, meeting: MeetingRecord, ac
 
             with btn_c2:
                 if st.button("🤖 AI 稽核成果佐證 (比對 T 佐證 vs Q 品質條件)", key=f"btn_audit_ev_{uid}"):
+                    st.session_state["meetings_active_id"] = meeting.id
                     parsed_resp = [r.strip() for r in new_resp.split(",") if r.strip()]
                     temp_item = act.model_copy(deep=True)
                     temp_item.qcdt.quality_criteria = new_q
@@ -310,4 +435,5 @@ def _render_action_item_card(repo: MeetingRepository, meeting: MeetingRecord, ac
                         evidence_audit_feedback=feedback_str,
                         enforce_evidence_on_done=False,
                     )
+                    st.session_state.pop(f"batch_editor_{meeting.id}", None)
                     st.rerun()

@@ -282,3 +282,106 @@ def test_flexible_date_formats_overdue_red_light_and_metrics() -> None:
     l_imp, s_imp, _ = classify_action_traffic_light(schema.action_items[0], ref_today)
     assert l_imp == "🔴 紅燈"
     assert s_imp == "🚨 逾期未完成"
+
+
+def test_tracker_sorting_and_duplicate_detection() -> None:
+    """驗證看板三四大排序模式（風險度紅➔黃➔藍➔綠置頂/置底、完成度分群、日期由新而舊含民國年）與重複任務標記."""
+    from src.ui.tracker_view import (
+        SORT_MODE_COMPLETION,
+        SORT_MODE_DATE_DESC,
+        SORT_MODE_DUE_ASC,
+        SORT_MODE_RISK_FIRST,
+        annotate_duplicate_tasks,
+        sort_tracker_rows,
+    )
+
+    rows = [
+        {
+            "燈號預警": "🟢 綠燈",
+            "🩺 治理與逾期狀態": "✅ 已完成 (Done)",
+            "會議日期": "2026-11-24",
+            "來源會議": "週會 C",
+            "任務編號": "ACT-G",
+            "待辦事項名稱": "已完成任務",
+            "執行狀態": "Done",
+            "A (最終當責者)": "陳經理",
+            "截止日 (D)": "2026-11-24",
+            "T (已提交佐證)": "報告連結",
+        },
+        {
+            "燈號預警": "🔵 藍燈",
+            "🩺 治理與逾期狀態": "⏳ 未完成/進行中",
+            "會議日期": "0115-11-23",  # 民國 115 = 2026-11-23
+            "來源會議": "1151123 主管週會",
+            "任務編號": "ACT-B",
+            "待辦事項名稱": "正常進行任務",
+            "執行狀態": "In Progress",
+            "A (最終當責者)": "王經理",
+            "截止日 (D)": "2026-11-30",
+            "T (已提交佐證)": "尚未提交",
+        },
+        {
+            "燈號預警": "🟡 黃燈",
+            "🩺 治理與逾期狀態": "⏳ 即將到期",
+            "會議日期": "2026-11-20",
+            "來源會議": "週會 B",
+            "任務編號": "ACT-Y",
+            "待辦事項名稱": "即將到期任務",
+            "執行狀態": "In Progress",
+            "A (最終當責者)": "林經理",
+            "截止日 (D)": "2026-11-26",
+            "T (已提交佐證)": "尚未提交",
+        },
+        {
+            "燈號預警": "🔴 紅燈",
+            "🩺 治理與逾期狀態": "🚨 逾期未完成",
+            "會議日期": "2026-11-09",
+            "來源會議": "週會 A",
+            "任務編號": "ACT-R-OLD",
+            "待辦事項名稱": "重複測試任務",
+            "執行狀態": "In Progress",
+            "A (最終當責者)": "張經理",
+            "截止日 (D)": "2026/11/15 00:00",
+            "T (已提交佐證)": "尚未提交",
+        },
+        {
+            "燈號預警": "🔴 紅燈",
+            "🩺 治理與逾期狀態": "🚨 逾期未完成",
+            "會議日期": "0115-11-23",  # 較新紅燈，應排在 2026-11-09 紅燈前面
+            "來源會議": "1151123 主管週會",
+            "任務編號": "ACT-R-NEW",
+            "待辦事項名稱": "重複測試任務",
+            "執行狀態": "Pending",
+            "A (最終當責者)": "張經理",
+            "截止日 (D)": "2026-11-23 12:00:00",
+            "T (已提交佐證)": "尚未提交",
+        },
+    ]
+
+    # 1. 風險度優先：紅(新)->紅(舊)->黃->藍->綠(已完成置底)
+    risk_sorted = sort_tracker_rows(rows, SORT_MODE_RISK_FIRST)
+    assert [r["任務編號"] for r in risk_sorted] == ["ACT-R-NEW", "ACT-R-OLD", "ACT-Y", "ACT-B", "ACT-G"]
+
+    # 2. 完成度分群：未完成(依日期新到舊) ➔ 已完成(置底)
+    comp_sorted = sort_tracker_rows(rows, SORT_MODE_COMPLETION)
+    assert comp_sorted[-1]["任務編號"] == "ACT-G"
+    assert comp_sorted[0]["會議日期"] == "0115-11-23"
+
+    # 3. 純會議日期排序（由新而舊，民國 0115-11-23 應排在 2026-11-24 之後、2026-11-20 之前）
+    date_sorted = sort_tracker_rows(rows, SORT_MODE_DATE_DESC)
+    assert date_sorted[0]["任務編號"] == "ACT-G"
+    assert date_sorted[-1]["任務編號"] == "ACT-R-OLD"
+
+    # 4. 截止日急迫度優先（最早逾期 2026/11/15 置頂，已完成置底）
+    due_sorted = sort_tracker_rows(rows, SORT_MODE_DUE_ASC)
+    assert due_sorted[0]["任務編號"] == "ACT-R-OLD"
+    assert due_sorted[-1]["任務編號"] == "ACT-G"
+
+    # 5. 重複任務自動偵測：同名同當責者之兩筆均標記疑似重複，且僅較舊者標記為 _is_redundant_dup=True
+    annotated = annotate_duplicate_tasks(rows)
+    by_id = {r["任務編號"]: r for r in annotated}
+    assert by_id["ACT-R-NEW"]["_dup_count"] == 2
+    assert by_id["ACT-R-OLD"]["_dup_count"] == 2
+    assert by_id["ACT-R-NEW"]["_is_redundant_dup"] is False  # 保留較新 1 筆
+    assert by_id["ACT-R-OLD"]["_is_redundant_dup"] is True   # 標記較舊副本可清理
+    assert by_id["ACT-B"]["_dup_count"] == 1

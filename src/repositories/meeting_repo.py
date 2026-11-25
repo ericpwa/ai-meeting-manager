@@ -24,7 +24,12 @@ from src.schemas.models import (
     RACIModel,
     SMARTGoalModel,
 )
-from src.services.governance import audit_action_item_governance, audit_meeting_extraction, validate_done_transition
+from src.services.governance import (
+    audit_action_item_governance,
+    audit_meeting_extraction,
+    parse_flexible_date,
+    validate_done_transition,
+)
 
 ORG_DIRECTORY_RECORD_ID = "00000000-0000-0000-0000-000000000099"
 
@@ -592,6 +597,11 @@ class MeetingRepository:
 
             filtered.append(rec)
 
+        def _meeting_sort_key(r: MeetingRecord) -> tuple[int, str]:
+            parsed_d = parse_flexible_date(r.meeting_date)
+            return (parsed_d.toordinal() if parsed_d else 0, r.updated_at or "")
+
+        filtered.sort(key=_meeting_sort_key, reverse=True)
         return filtered
 
     def update_action_item(
@@ -659,18 +669,196 @@ class MeetingRepository:
         saved = self.save_meeting(meeting)
         return True, f"✅ 待辦事項「{target_item.task_title}」已成功更新並寫入資料庫。", saved
 
+    def batch_update_meeting_action_items(
+        self,
+        meeting_id: str,
+        updates: list[dict[str, Any]],
+        enforce_evidence_on_done: bool = True,
+    ) -> tuple[int, list[str], MeetingRecord | None]:
+        """原子化一鍵批次更新同一場會議中之多個待辦事項，並嚴格檢核 Done 狀態之 T (成果佐證) 閉環.
+
+        每筆 `updates` 字典支援鍵值：
+        - `item_index` (int, 選填): 任務在 action_items 中之精確索引（避免重複 ID 誤蓋）
+        - `action_id` (str): 任務編號
+        - `status` / `accountable` / `responsible` (list[str]) / `due_date` / `evidence_submitted`
+
+        回傳:
+            (updated_count, blocked_errors, saved_meeting)
+        """
+        if meeting_id == ORG_DIRECTORY_RECORD_ID:
+            return 0, ["系統保留之組織名冊記錄不可修改。"], None
+
+        meeting = self.get_meeting_by_id(meeting_id)
+        if not meeting:
+            return 0, [f"找不到會議記錄 (ID: {meeting_id})"], None
+
+        updated_count = 0
+        blocked_errors: list[str] = []
+
+        for upd in updates:
+            item_index = upd.get("item_index")
+            action_id = str(upd.get("action_id", "")).strip()
+            target_item: ActionItem | None = None
+
+            if isinstance(item_index, int) and 0 <= item_index < len(meeting.action_items):
+                cand = meeting.action_items[item_index]
+                if not action_id or cand.id == action_id:
+                    target_item = cand
+            if target_item is None and action_id:
+                for cand in meeting.action_items:
+                    if cand.id == action_id:
+                        target_item = cand
+                        break
+            if target_item is None:
+                continue
+
+            new_status = str(upd.get("status", target_item.status)).strip()
+            if new_status not in {"Pending", "In Progress", "Blocked", "Done"}:
+                new_status = target_item.status
+
+            new_ev = (
+                str(upd["evidence_submitted"]).strip()
+                if "evidence_submitted" in upd and upd["evidence_submitted"] is not None
+                else target_item.qcdt.evidence_submitted
+            )
+            new_acc = (
+                str(upd["accountable"]).strip()
+                if "accountable" in upd and upd["accountable"] is not None
+                else target_item.raci.accountable
+            )
+            new_resp_raw = upd.get("responsible")
+            if isinstance(new_resp_raw, list):
+                new_resp = [str(r).strip() for r in new_resp_raw if str(r).strip()]
+            elif isinstance(new_resp_raw, str):
+                new_resp = [r.strip() for r in new_resp_raw.replace("、", ",").replace("，", ",").split(",") if r.strip()]
+            else:
+                new_resp = list(target_item.raci.responsible)
+            new_due = (
+                str(upd["due_date"]).strip()
+                if "due_date" in upd and upd["due_date"] is not None
+                else target_item.due_date
+            )
+
+            changed = (
+                new_status != target_item.status
+                or new_ev != target_item.qcdt.evidence_submitted
+                or (bool(new_acc) and new_acc != target_item.raci.accountable)
+                or (bool(new_resp) and new_resp != target_item.raci.responsible)
+                or (bool(new_due) and new_due != target_item.due_date)
+            )
+            if not changed:
+                continue
+
+            if enforce_evidence_on_done and new_status == "Done":
+                ok, msg = validate_done_transition(target_item, new_status, new_ev)
+                if not ok:
+                    blocked_errors.append(f"【{target_item.id}】{target_item.task_title}：{msg}")
+                    continue
+
+            target_item.status = new_status  # type: ignore[assignment]
+            target_item.qcdt.evidence_submitted = new_ev
+            if new_acc:
+                target_item.raci.accountable = new_acc
+                target_item.owner = new_acc
+            if new_resp:
+                target_item.raci.responsible = new_resp
+            if new_due:
+                target_item.due_date = new_due
+
+            audit_action_item_governance(target_item)
+            updated_count += 1
+
+        if updated_count > 0:
+            saved = self.save_meeting(meeting)
+            return updated_count, blocked_errors, saved
+        return 0, blocked_errors, meeting
+
     def delete_meeting(self, meeting_id: str) -> bool:
-        """刪除指定會議記錄."""
+        """安全刪除指定會議記錄（嚴格禁止刪除系統組織名冊紀錄）."""
+        if not meeting_id or meeting_id == ORG_DIRECTORY_RECORD_ID:
+            return False
+
+        deleted_cloud = False
         if self._active_mode == "supabase" and self._supabase_client is not None:
             try:
                 self._supabase_client.table("meetings").delete().eq("id", meeting_id).execute()
+                deleted_cloud = True
             except Exception as exc:
                 self._last_error = f"Supabase 刪除失敗：{exc}"
 
         with self._get_sqlite_conn() as conn:
             cur = conn.execute("DELETE FROM meetings WHERE id = ?", (meeting_id,))
             conn.commit()
-            return cur.rowcount > 0
+            return deleted_cloud or (cur.rowcount > 0)
+
+    def delete_action_items_by_keys(
+        self,
+        targets: list[tuple[str, int, str]],
+        remove_empty_meetings: bool = False,
+    ) -> tuple[int, int, str]:
+        """精準刪除指定之單筆或多筆待辦事項 `(meeting_id, item_index, action_id)`，確保其餘正式資料不受影響.
+
+        回傳:
+            (deleted_actions_count, deleted_meetings_count, summary_message)
+        """
+        grouped: dict[str, list[tuple[int, str]]] = {}
+        for mid, item_idx, act_id in targets:
+            if not mid or mid == ORG_DIRECTORY_RECORD_ID:
+                continue
+            grouped.setdefault(mid, []).append((item_idx, act_id))
+
+        deleted_actions = 0
+        deleted_meetings = 0
+
+        for mid, items_to_remove in grouped.items():
+            meeting = self.get_meeting_by_id(mid)
+            if meeting is None:
+                continue
+
+            indices_to_drop: set[int] = set()
+            for item_idx, act_id in items_to_remove:
+                if 0 <= item_idx < len(meeting.action_items) and meeting.action_items[item_idx].id == act_id:
+                    indices_to_drop.add(item_idx)
+                else:
+                    for fallback_idx, cand in enumerate(meeting.action_items):
+                        if cand.id == act_id and fallback_idx not in indices_to_drop:
+                            indices_to_drop.add(fallback_idx)
+                            break
+
+            if not indices_to_drop:
+                continue
+
+            meeting.action_items = [
+                act for idx, act in enumerate(meeting.action_items) if idx not in indices_to_drop
+            ]
+            deleted_actions += len(indices_to_drop)
+
+            if not meeting.action_items and remove_empty_meetings:
+                if self.delete_meeting(mid):
+                    deleted_meetings += 1
+            else:
+                self.save_meeting(meeting)
+
+        if deleted_actions == 0:
+            return 0, 0, "ℹ️ 未找到符合條件之待辦事項可供刪除。"
+
+        msg = f"✅ 已安全刪除 {deleted_actions} 項待辦任務"
+        if deleted_meetings > 0:
+            msg += f"（並一併移除 {deleted_meetings} 場已無任務之空會議）"
+        msg += "，其餘正式會議與組織名冊資料完整保留。"
+        return deleted_actions, deleted_meetings, msg
+
+    def batch_delete_meetings(self, meeting_ids: list[str]) -> tuple[int, str]:
+        """安全批次刪除多場指定之測試或重複會議（嚴格保護系統名冊紀錄）."""
+        deleted_count = 0
+        for mid in dict.fromkeys(meeting_ids):
+            if mid and mid != ORG_DIRECTORY_RECORD_ID:
+                if self.delete_meeting(mid):
+                    deleted_count += 1
+
+        if deleted_count == 0:
+            return 0, "ℹ️ 未刪除任何會議記錄。"
+        return deleted_count, f"✅ 已安全刪除 {deleted_count} 場指定會議記錄，其餘正式資料完整保留。"
 
     def get_org_directory(self, include_from_meetings: bool = True) -> tuple[list[str], list[str]]:
         """取得企業部門名稱清單與與會人員（當責者 A / 執行者 R 候選）名冊."""

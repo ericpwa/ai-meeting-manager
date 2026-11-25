@@ -84,7 +84,7 @@ def test_streamlit_action_item_evidence_closed_loop_and_tracker(tmp_path: Path, 
     at.button(key=f"btn_save_act_{target_uid}").click().run()
     assert len(at.exception) == 0
 
-    # (c) 測試 Tab 3 全域行動方案追蹤看板篩選器（四色燈號與治理狀態連動）
+    # (c) 測試 Tab 3 全域行動方案追蹤看板篩選器（四色燈號、排序選項與編輯清理模式切換）
     at.selectbox(key="trk_filter_health").select("🟡 黃燈：⚠️ 治理缺口").run()
     assert len(at.exception) == 0
     assert len(at.dataframe) >= 1
@@ -92,6 +92,13 @@ def test_streamlit_action_item_evidence_closed_loop_and_tracker(tmp_path: Path, 
     at.selectbox(key="trk_filter_health").select("🔴 紅燈（全部：逾期未完成＋執行受阻）").run()
     assert len(at.exception) == 0
     assert len(at.dataframe) >= 1
+
+    at.selectbox(key="trk_sort_mode").select("📅 會議日期排序（由新而舊）").run()
+    assert len(at.exception) == 0
+
+    at.toggle(key="trk_edit_mode_toggle").set_value(True).run()
+    assert len(at.exception) == 0
+    assert any("看板三編輯與清理工作區" in m.value for m in at.markdown)
 
     # (d) 測試 Tab 4 跨部門主動催辦與通知中心：切換為 Email 格式、高階升級預警語氣，並觸發 Webhook 模擬推播
     at.selectbox(key="notif_sel_channel").select("📧 Email 正式當責稽核信").run()
