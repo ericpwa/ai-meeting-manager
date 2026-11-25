@@ -153,3 +153,132 @@ def test_meeting_input_templates_all_four_formats() -> None:
     assert len(extracted.action_items) == 2
     assert extracted.action_items[0].task_title == "完成 AI 會議記錄公版匯入模組與四色燈號預警測試"
     assert "標準輸入格式公版" in ext_msg
+
+
+def test_flexible_date_formats_overdue_red_light_and_metrics() -> None:
+    """回歸測試：驗證 Excel 斜線/時間戳、民國年與各式逾期日期皆正確判定為 🔴 紅燈 (🚨 逾期未完成)."""
+    import pandas as pd
+
+    from src.schemas.models import MeetingRecord
+    from src.services.governance import (
+        compute_governance_metrics,
+        normalize_date_str,
+        parse_flexible_date,
+    )
+    from src.services.meeting_template_service import parse_dataframe_to_meeting_schema
+    from src.services.notification_service import scan_followup_targets
+
+    ref_today = datetime.date(2026, 11, 25)
+
+    def _make_item(due: str, status: str = "In Progress") -> ActionItem:
+        return ActionItem(
+            id="ACT-DATE",
+            task_title=f"日期測試 ({due})",
+            department="綠能部",
+            owner="王經理",
+            due_date=due,
+            status=status,  # type: ignore[arg-type]
+            raci=RACIModel(accountable="王經理", responsible=["王經理"]),
+            smart=SMARTGoalModel(
+                hierarchy_level="工作任務 (Work Task)",
+                specific="完成任務",
+                measurable="100%",
+                time_bound=due,
+            ),
+            qcdt=QCDTModel(
+                quality_criteria="驗收通過",
+                delivery_milestone=due,
+                truthfulness_req="提出報告",
+                evidence_submitted="已完成佐證" if status == "Done" else "",
+            ),
+            governance_gaps=[],
+        )
+
+    # 1. 各式逾期日期（含螢幕截圖實際出現之 Excel 斜線/時間戳與台灣民國年格式）皆必須亮 🔴 紅燈
+    overdue_samples = [
+        "2026/11/15 00:00",
+        "2026/11/16 00:00",
+        "2026-11-23 12:00:00",
+        "2026-11-23T12:00:00",
+        "2026/11/5",
+        "2026.11.15",
+        "2026年11月15日",
+        "11/15/2026",
+        "20261115",
+        "0115-11-23",
+        "115/11/23",
+        "115.11.23",
+        "115年11月23日",
+        "民國115年11月23日",
+        "1151123",
+        "２０２６／１１／１５ ００：００",
+    ]
+    for sample_due in overdue_samples:
+        light, status_lbl, _ = classify_action_traffic_light(_make_item(sample_due, "In Progress"), ref_today)
+        assert light == "🔴 紅燈", f"逾期日期 {sample_due!r} 應亮紅燈，實際得到 {light}"
+        assert status_lbl == "🚨 逾期未完成", f"逾期日期 {sample_due!r} 狀態應為逾期未完成，實際得到 {status_lbl}"
+
+    # 2. 即將到期 (1~3天內含時間戳) -> 🟡 黃燈
+    for soon_due in ["2026-11-26 17:30:00", "2026-11-27 17:30:00", "2026/11/25 00:00"]:
+        light, status_lbl, _ = classify_action_traffic_light(_make_item(soon_due, "In Progress"), ref_today)
+        assert light == "🟡 黃燈", f"即將到期日期 {soon_due!r} 應亮黃燈，實際得到 {light}"
+        assert status_lbl == "⏳ 即將到期"
+
+    # 3. 超過 3 天之未來日期 (含時間戳) -> 🔵 藍燈
+    for future_due in ["2026/11/30 00:00", "2026-11-30 09:00:00"]:
+        light, status_lbl, _ = classify_action_traffic_light(_make_item(future_due, "In Progress"), ref_today)
+        assert light == "🔵 藍燈", f"未來日期 {future_due!r} 應亮藍燈，實際得到 {light}"
+        assert status_lbl == "⏳ 未完成/進行中"
+
+    # 4. 驗證全域 KPI 統計與主動催辦掃描同步識別非 ISO 逾期日期
+    mock_meeting = MeetingRecord(
+        id="m-overdue-test",
+        title="1151123 主管週會",
+        meeting_date="2026-11-23",
+        departments=["綠能部"],
+        attendees=["王經理"],
+        executive_summary="測試逾期日期解析",
+        key_decisions=["決議"],
+        action_items=[
+            _make_item("2026/11/15 00:00", "In Progress"),
+            _make_item("2026-11-23 12:00:00", "Pending"),
+            _make_item("2026-11-30 09:00:00", "In Progress"),
+        ],
+    )
+    metrics = compute_governance_metrics([mock_meeting], reference_date=ref_today)
+    assert metrics["overdue_actions"] == 2
+
+    followups = scan_followup_targets([mock_meeting], reference_date=ref_today)
+    overdue_followups = [e for e in followups if e.urgency_category == "🚨 逾期未完成"]
+    assert len(overdue_followups) == 2
+
+    # 5. 驗證 Excel/CSV 公版匯入時自動正規化民國年與斜線時間戳
+    assert parse_flexible_date("0115-11-23") == datetime.date(2026, 11, 23)
+    assert normalize_date_str("0115-11-23") == "2026-11-23"
+    assert normalize_date_str("2026/11/15 00:00", keep_nonzero_time=True) == "2026-11-15"
+    assert normalize_date_str("2026-11-23 12:00:00", keep_nonzero_time=True) == "2026-11-23 12:00"
+
+    df_excel = pd.DataFrame(
+        [
+            {
+                "會議日期": "0115-11-23",
+                "來源會議": "1151123 主管週會",
+                "任務編號": "ACT-01",
+                "待辦事項名稱": "確認臺旺儲能數據",
+                "執行狀態": "Pending",
+                "主責/跨部門": "綠能部",
+                "A (最終當責者)": "王經理",
+                "R (實際執行者)": "王經理",
+                "截止日 (D)": "2026-11-23 12:00:00",
+                "Q (品質驗收條件)": "提出臺旺儲能數據",
+                "T (證據要求)": "提交數據報告",
+            }
+        ]
+    )
+    schema = parse_dataframe_to_meeting_schema(df_excel)
+    assert schema is not None
+    assert schema.meeting_date == "2026-11-23"
+    assert schema.action_items[0].due_date == "2026-11-23 12:00"
+    l_imp, s_imp, _ = classify_action_traffic_light(schema.action_items[0], ref_today)
+    assert l_imp == "🔴 紅燈"
+    assert s_imp == "🚨 逾期未完成"

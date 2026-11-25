@@ -28,6 +28,7 @@ from src.config import (
     get_webhook_url,
 )
 from src.schemas.models import ActionItem, MeetingRecord
+from src.services.governance import get_taiwan_today, is_action_overdue
 
 
 class FollowUpTaskEntry(BaseModel):
@@ -68,7 +69,6 @@ def scan_followup_targets(
     reference_date: datetime.date | None = None,
 ) -> list[FollowUpTaskEntry]:
     """掃描所有會議記錄，篩選出需要主動催辦或治理補強之待辦事項."""
-    today = reference_date or datetime.date.today()
     entries: list[FollowUpTaskEntry] = []
 
     for m in meetings:
@@ -76,21 +76,13 @@ def scan_followup_targets(
             if act.status == "Done" and not act.governance_gaps:
                 continue
 
-            due_str = (act.due_date or "").strip()
-            days_delta: int | None = None
-            is_overdue = False
-            is_due_soon = False
-
-            if re.match(r"^\d{4}-\d{2}-\d{2}$", due_str):
-                try:
-                    due_dt = datetime.date.fromisoformat(due_str)
-                    days_delta = (due_dt - today).days
-                    if act.status != "Done" and days_delta < 0:
-                        is_overdue = True
-                    elif act.status != "Done" and 0 <= days_delta <= 3:
-                        is_due_soon = True
-                except ValueError:
-                    pass
+            is_overdue, days_delta = is_action_overdue(act, reference_date=reference_date)
+            is_due_soon = bool(
+                act.status != "Done"
+                and not is_overdue
+                and days_delta is not None
+                and 0 <= days_delta <= 3
+            )
 
             # 判定催辦優先分類
             category: Literal["🚨 逾期未完成", "🛑 執行受阻 (Blocked)", "⚠️ 治理缺口待補齊", "⏳ 3日內即將到期"] | None = None
@@ -174,7 +166,7 @@ def generate_channel_message(
     target_accountable: str = "全體當責人",
 ) -> str:
     """根據選定之通知通道與管理語氣，產出結構化 RACI + SMART + QCD+T 催辦摘要訊息."""
-    today_iso = datetime.date.today().isoformat()
+    today_iso = get_taiwan_today().isoformat()
     if not entries:
         return f"✅ 【{today_iso} 會議治理巡檢】目前「{target_accountable}」名下無任何逾期、受阻或存在治理缺口之待辦事項！"
 

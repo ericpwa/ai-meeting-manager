@@ -12,14 +12,21 @@
 
 from __future__ import annotations
 
+import datetime
 import re
 from typing import Iterable
 
 from src.schemas.models import ActionItem, MeetingExtractionSchema, MeetingRecord
 
+TAIWAN_TZ = datetime.timezone(datetime.timedelta(hours=8))
+
 # 視為未指定或模糊的佔位詞集合
 VAGUE_PLACEHOLDERS = {
     "",
+    "-",
+    "--",
+    "—",
+    "–",
     "無",
     "未指定",
     "待定",
@@ -185,14 +192,189 @@ def validate_done_transition(item: ActionItem, new_status: str, new_evidence: st
     return True, "✅ 已提供成果佐證 (T)，符合結案閉環要求。"
 
 
+def get_taiwan_now() -> datetime.datetime:
+    """取得台灣標準時間 (UTC+8) 當前日期時間，避免雲端伺服器 UTC 時差導致逾期誤判."""
+    return datetime.datetime.now(TAIWAN_TZ)
+
+
+def get_taiwan_today() -> datetime.date:
+    """取得台灣標準時間 (UTC+8) 今日日期."""
+    return get_taiwan_now().date()
+
+
+def _to_halfwidth(text: str) -> str:
+    """將常見全形數字與日期符號正規化為半形."""
+    trans = str.maketrans("０１２３４５６７８９／－．：　", "0123456789/-.: ")
+    return text.translate(trans)
+
+
+def _convert_year_to_ad(raw_year: int) -> int | None:
+    """支援西元年 (1900-2199) 與台灣民國年 (1-300，自動加 1911 轉西元)."""
+    if 1900 <= raw_year <= 2199:
+        return raw_year
+    if 1 <= raw_year <= 300:
+        return raw_year + 1911
+    return None
+
+
+def _build_time_from_groups(
+    meridiem_zh: str | None,
+    hh: str | None,
+    mm: str | None,
+    ss: str | None,
+    meridiem_en: str | None,
+) -> datetime.time | None:
+    if hh is None or mm is None:
+        return None
+    try:
+        hour = int(hh)
+        minute = int(mm)
+        second = int(ss) if ss is not None else 0
+        if meridiem_zh == "下午" or (meridiem_en and meridiem_en.lower() == "pm"):
+            if 1 <= hour <= 11:
+                hour += 12
+        elif meridiem_zh == "上午" or (meridiem_en and meridiem_en.lower() == "am"):
+            if hour == 12:
+                hour = 0
+        return datetime.time(hour, minute, second)
+    except ValueError:
+        return None
+
+
+def parse_flexible_datetime(date_str: str | None) -> tuple[datetime.date | None, datetime.time | None]:
+    """彈性解析多種企業常見日期/時間格式，回傳 `(date, time_or_none)`.
+
+    支援格式：
+    - 標準 ISO 與斜線/點分隔（含時間）：`2026-11-15`, `2026/11/15 00:00`, `2026-11-23 12:00:00`, `2026.11.5`, `2026-11-23T17:30:00`
+    - 台灣民國年格式：`0115-11-23`, `115/11/23`, `115.11.23`, `115年11月23日`, `民國115年11月23日`, `1151123`
+    - 中文西元年格式：`2026年11月15日`, `2026年11月5號`
+    - 美式斜線/連字號：`11/15/2026`, `11-15-2026 00:00`
+    - 8 碼緊湊西元日期：`20261115`
+    """
+    if not date_str:
+        return None, None
+    cleaned = _to_halfwidth(str(date_str).strip())
+    if is_vague_or_empty(cleaned):
+        return None, None
+
+    time_tail = r"(?:[T\s]+(?:(上午|下午)\s*)?(\d{1,2}):(\d{2})(?::(\d{2}))?(?:\s*(AM|PM|am|pm))?)?"
+
+    # 1. Y-M-D / Y/M/D / Y.M.D (含西元與民國 0115 / 115)
+    m1 = re.search(rf"(?<!\d)(\d{{2,4}})[-/.](\d{{1,2}})[-/.](\d{{1,2}}){time_tail}(?!\d)", cleaned)
+    if m1:
+        ad_year = _convert_year_to_ad(int(m1.group(1)))
+        month, day = int(m1.group(2)), int(m1.group(3))
+        if ad_year is not None and 1 <= month <= 12 and 1 <= day <= 31:
+            try:
+                parsed_d = datetime.date(ad_year, month, day)
+                parsed_t = _build_time_from_groups(m1.group(4), m1.group(5), m1.group(6), m1.group(7), m1.group(8))
+                return parsed_d, parsed_t
+            except ValueError:
+                pass
+
+    # 2. 中文年月日 (2026年11月15日 / 民國115年11月23日 / 115年11月23號)
+    m2 = re.search(rf"(?:民國\s*)?(\d{{2,4}})\s*年\s*(\d{{1,2}})\s*月\s*(\d{{1,2}})\s*[日號]{time_tail}", cleaned)
+    if m2:
+        ad_year = _convert_year_to_ad(int(m2.group(1)))
+        month, day = int(m2.group(2)), int(m2.group(3))
+        if ad_year is not None:
+            try:
+                parsed_d = datetime.date(ad_year, month, day)
+                parsed_t = _build_time_from_groups(m2.group(4), m2.group(5), m2.group(6), m2.group(7), m2.group(8))
+                return parsed_d, parsed_t
+            except ValueError:
+                pass
+
+    # 3. 美式 MM/DD/YYYY 或 MM-DD-YYYY
+    m3 = re.search(rf"(?<!\d)(\d{{1,2}})[-/](\d{{1,2}})[-/](\d{{4}}){time_tail}(?!\d)", cleaned)
+    if m3:
+        month, day, year = int(m3.group(1)), int(m3.group(2)), int(m3.group(3))
+        if 1900 <= year <= 2199:
+            try:
+                parsed_d = datetime.date(year, month, day)
+                parsed_t = _build_time_from_groups(m3.group(4), m3.group(5), m3.group(6), m3.group(7), m3.group(8))
+                return parsed_d, parsed_t
+            except ValueError:
+                pass
+
+    # 4. 8 碼緊湊西元日期 YYYYMMDD (如 20261115)
+    m4 = re.search(r"(?<!\d)((?:19|20|21)\d{2})(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])(?!\d)", cleaned)
+    if m4:
+        try:
+            return datetime.date(int(m4.group(1)), int(m4.group(2)), int(m4.group(3))), None
+        except ValueError:
+            pass
+
+    # 5. 7 碼緊湊民國日期 YYYMMDD (如 1151123)
+    m5 = re.search(r"(?<!\d)(\d{3})(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])(?!\d)", cleaned)
+    if m5:
+        ad_year = _convert_year_to_ad(int(m5.group(1)))
+        if ad_year is not None and 1990 <= ad_year <= 2150:
+            try:
+                return datetime.date(ad_year, int(m5.group(2)), int(m5.group(3))), None
+            except ValueError:
+                pass
+
+    return None, None
+
+
+def parse_flexible_date(date_str: str | None) -> datetime.date | None:
+    """彈性解析日期字串並回傳 `datetime.date`（解析失敗則回傳 None）."""
+    parsed_d, _ = parse_flexible_datetime(date_str)
+    return parsed_d
+
+
+def normalize_date_str(date_str: str | None, keep_nonzero_time: bool = False) -> str:
+    """將各種日期格式（含 Excel 時間戳與民國年）正規化為標準 `YYYY-MM-DD`（或選用保留非午夜時間）."""
+    raw = (date_str or "").strip()
+    if is_vague_or_empty(raw):
+        return ""
+    parsed_d, parsed_t = parse_flexible_datetime(raw)
+    if parsed_d is None:
+        return raw
+    if keep_nonzero_time and parsed_t is not None and (parsed_t.hour, parsed_t.minute, parsed_t.second) != (0, 0, 0):
+        return f"{parsed_d.isoformat()} {parsed_t.strftime('%H:%M')}"
+    return parsed_d.isoformat()
+
+
+def is_action_overdue(
+    act: ActionItem,
+    reference_date: datetime.date | None = None,
+) -> tuple[bool, int | None]:
+    """統一判定單一待辦事項是否逾期及其距離截止日之天數差 `(is_overdue, days_delta)`."""
+    today = reference_date or get_taiwan_today()
+    due_dt, due_tm = parse_flexible_datetime(act.due_date)
+    if due_dt is None:
+        return False, None
+
+    days_delta = (due_dt - today).days
+    if act.status == "Done":
+        return False, days_delta
+
+    if days_delta < 0:
+        return True, days_delta
+
+    # 若未指定外部基準日且為當日明確非午夜時間（例如 2026-11-25 12:00:00），已過該時點亦視為逾期
+    if (
+        reference_date is None
+        and days_delta == 0
+        and due_tm is not None
+        and (due_tm.hour, due_tm.minute, due_tm.second) != (0, 0, 0)
+        and due_tm < get_taiwan_now().time()
+    ):
+        return True, days_delta
+
+    return False, days_delta
+
+
 def classify_action_traffic_light(
     act: ActionItem,
-    reference_date: __import__("datetime").date | None = None,
+    reference_date: datetime.date | None = None,
 ) -> tuple[str, str, str]:
     """判定單一待辦事項之『燈號預警 (紅/黃/藍/綠燈)』與『🩺 治理與逾期狀態』分類.
 
     規則對應：
-    1. 🔴 紅燈 — 🚨 逾期未完成 (status != Done 且 due_date < today)
+    1. 🔴 紅燈 — 🚨 逾期未完成 (status != Done 且 due_date 已逾期，支援多種西元/民國/含時間戳格式)
     2. 🔴 紅燈 — 🛑 執行受阻 (Blocked) (status == Blocked)
     3. 🟡 黃燈 — ⚠️ 治理缺口 (存在 RACI/SMART/QCD+T 缺口)
     4. 🟡 黃燈 — ⏳ 即將到期 (status != Done 且 0 <= 剩餘天數 <= 3)
@@ -202,21 +384,10 @@ def classify_action_traffic_light(
     回傳:
         (traffic_light, governance_status, combined_badge)
     """
-    import datetime as _dt
-
-    today = reference_date or _dt.date.today()
-    due_str = (act.due_date or "").strip()
-    days_delta: int | None = None
-
-    if re.match(r"^\d{4}-\d{2}-\d{2}$", due_str):
-        try:
-            due_dt = _dt.date.fromisoformat(due_str)
-            days_delta = (due_dt - today).days
-        except ValueError:
-            days_delta = None
+    overdue, days_delta = is_action_overdue(act, reference_date=reference_date)
 
     # 1. 逾期未完成 -> 紅燈
-    if act.status != "Done" and days_delta is not None and days_delta < 0:
+    if act.status != "Done" and overdue:
         return "🔴 紅燈", "🚨 逾期未完成", "🔴 紅燈｜🚨 逾期未完成"
 
     # 2. 執行受阻 (Blocked) -> 紅燈
@@ -239,7 +410,10 @@ def classify_action_traffic_light(
     return "🟢 綠燈", "✅ 已完成 (Done)", "🟢 綠燈｜✅ 已完成 (Done)"
 
 
-def compute_governance_metrics(meetings: Iterable[MeetingRecord]) -> dict[str, int | float]:
+def compute_governance_metrics(
+    meetings: Iterable[MeetingRecord],
+    reference_date: datetime.date | None = None,
+) -> dict[str, int | float]:
     """計算跨會議之全域管理指標 (供 Global Action Tracker 儀表板使用)."""
     total_meetings = 0
     total_actions = 0
@@ -250,8 +424,6 @@ def compute_governance_metrics(meetings: Iterable[MeetingRecord]) -> dict[str, i
     overdue_actions = 0
     gaps_count = 0
     verified_evidence_count = 0
-
-    today_str = re.sub(r"[^0-9-]", "", str( __import__("datetime").date.today().isoformat()))
 
     for m in meetings:
         total_meetings += 1
@@ -272,11 +444,10 @@ def compute_governance_metrics(meetings: Iterable[MeetingRecord]) -> dict[str, i
             if act.qcdt.evidence_verified or (act.status == "Done" and not is_vague_or_empty(act.qcdt.evidence_submitted)):
                 verified_evidence_count += 1
 
-            # 檢查是否逾期 (YYYY-MM-DD < today 且狀態非 Done)
-            due = (act.due_date or "").strip()
-            if act.status != "Done" and re.match(r"^\d{4}-\d{2}-\d{2}$", due):
-                if due < today_str:
-                    overdue_actions += 1
+            # 統一透過彈性日期解析引擎檢查是否逾期（相容 Excel 斜線/時間戳/民國年等所有日期格式）
+            overdue, _ = is_action_overdue(act, reference_date=reference_date)
+            if overdue:
+                overdue_actions += 1
 
     completion_rate = round((done_actions / total_actions) * 100, 1) if total_actions > 0 else 0.0
     governance_health_rate = (

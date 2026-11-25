@@ -60,7 +60,7 @@ def run_live_system_diagnostics(repo: MeetingRepository) -> list[dict[str, str]]
             }
         )
 
-    # 2. RACI 單一當責、QCD+T 結案佐證閉環與四色燈號預警查核
+    # 2. RACI 單一當責、QCD+T 結案佐證閉環與四色燈號預警查核（含多格式逾期日期解析驗證）
     dummy_item = ActionItem(
         id="DIAG-01",
         task_title="自我診斷測試任務",
@@ -70,7 +70,15 @@ def run_live_system_diagnostics(repo: MeetingRepository) -> list[dict[str, str]]
     raci_ok = any("RACI 違規" in g for g in audited.governance_gaps)
     done_blocked, _ = validate_done_transition(dummy_item, "Done", "")
     light_color, _, _ = classify_action_traffic_light(audited)
-    light_ok = light_color == "🟡 黃燈"
+    overdue_probe = ActionItem(
+        id="DIAG-02",
+        task_title="多格式逾期測試",
+        due_date="2020/01/01 00:00",
+        status="In Progress",
+        raci=RACIModel(accountable="王經理", responsible=["王經理"]),
+    )
+    overdue_light, overdue_status, _ = classify_action_traffic_light(overdue_probe)
+    light_ok = (light_color == "🟡 黃燈") and (overdue_light == "🔴 紅燈") and (overdue_status == "🚨 逾期未完成")
     results.append(
         {
             "查核項目": "2. RACI 當責、QCD+T 閉環 & 四色燈號預警引擎",

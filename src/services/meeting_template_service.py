@@ -28,7 +28,11 @@ from src.schemas.models import (
     RACIModel,
     SMARTGoalModel,
 )
-from src.services.governance import audit_meeting_extraction
+from src.services.governance import (
+    audit_meeting_extraction,
+    get_taiwan_today,
+    normalize_date_str,
+)
 
 STANDARD_COLUMNS = [
     "會議日期",
@@ -81,7 +85,7 @@ SMART_LEVEL_ALIAS_MAP = {
 
 def _sample_template_rows() -> list[dict[str, str]]:
     """產生公版預設範例資料列."""
-    today = datetime.date.today()
+    today = get_taiwan_today()
     d_today = today.isoformat()
     d_plus_5 = (today + datetime.timedelta(days=5)).isoformat()
     d_plus_10 = (today + datetime.timedelta(days=10)).isoformat()
@@ -294,7 +298,7 @@ def parse_dataframe_to_meeting_schema(
 
     meta = meta_overrides or {}
     meeting_title = str(meta.get("title", "")).strip()
-    meeting_date = str(meta.get("meeting_date", "")).strip()
+    meeting_date = normalize_date_str(str(meta.get("meeting_date", "")).strip())
     depts_all: list[str] = list(meta.get("departments", []))
     attendees_all: list[str] = list(meta.get("attendees", []))
     decisions_all: list[str] = list(meta.get("key_decisions", []))
@@ -308,7 +312,7 @@ def parse_dataframe_to_meeting_schema(
 
         row_date = _get_val(row, ["會議日期", "日期", "meeting_date"])
         if row_date and not meeting_date:
-            meeting_date = row_date[:10]
+            meeting_date = normalize_date_str(row_date) or row_date[:10]
 
         row_source = _get_val(row, ["來源會議", "會議名稱", "會議標題", "title"])
         if row_source and not meeting_title:
@@ -322,7 +326,8 @@ def parse_dataframe_to_meeting_schema(
         cons_str = _get_val(row, ["C (應徵詢者)", "應徵詢者", "徵詢者", "C", "consulted"])
         inf_str = _get_val(row, ["I (應被告知者)", "應被告知者", "告知者", "I", "informed"])
         smart_lvl = _normalize_smart_level(_get_val(row, ["SMART 層級", "目標層級", "層級", "hierarchy_level"]))
-        due_str = _get_val(row, ["截止日 (D)", "截止日", "截止日期", "期限", "due_date", "D"], default="待定")
+        raw_due_str = _get_val(row, ["截止日 (D)", "截止日", "截止日期", "期限", "due_date", "D"], default="待定")
+        due_str = normalize_date_str(raw_due_str, keep_nonzero_time=True) or "待定"
         q_str = _get_val(row, ["Q (品質驗收條件)", "品質驗收條件", "驗收條件", "Q", "quality_criteria"])
         c_str = _get_val(row, ["C (成本預算)", "成本預算", "預算", "成本", "C", "cost_budget"], default="0 元 (內部資源/工時)")
         t_req_str = _get_val(row, ["T (證據要求)", "證據要求", "可驗證證據要求", "T", "truthfulness_req"])
@@ -386,7 +391,7 @@ def parse_dataframe_to_meeting_schema(
     if not meeting_title:
         meeting_title = "標準公版匯入之跨部門管理會議"
     if not meeting_date:
-        meeting_date = datetime.date.today().isoformat()
+        meeting_date = get_taiwan_today().isoformat()
     if not decisions_all:
         decisions_all = [
             f"依循標準輸入格式公版確立 {len(action_items)} 項跨部門待辦事項與 RACI 單一當責歸屬。",
@@ -437,7 +442,8 @@ def try_parse_structured_template_text(text: str) -> MeetingExtractionSchema | N
     for ln in lines:
         plain_ln = re.sub(r"^[\-\*\+#\d\.\s]+|\*\*", "", ln).strip()
         if plain_ln.startswith(("會議日期：", "會議日期:")):
-            meta["meeting_date"] = re.split(r"[：:]", plain_ln, maxsplit=1)[1].strip()[:10]
+            raw_m_date = re.split(r"[：:]", plain_ln, maxsplit=1)[1].strip()
+            meta["meeting_date"] = normalize_date_str(raw_m_date) or raw_m_date[:10]
         elif plain_ln.startswith(("來源會議：", "來源會議:", "會議名稱：", "會議標題：")):
             meta["title"] = re.split(r"[：:]", plain_ln, maxsplit=1)[1].strip()
         elif plain_ln.startswith(("參與部門：", "參與部門:")):

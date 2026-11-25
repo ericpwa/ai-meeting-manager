@@ -18,7 +18,7 @@ import pandas as pd
 import streamlit as st
 
 from src.repositories.meeting_repo import MeetingRepository
-from src.services.governance import classify_action_traffic_light, compute_governance_metrics
+from src.services.governance import classify_action_traffic_light, compute_governance_metrics, get_taiwan_today
 from src.services.org_directory_service import (
     generate_sample_roster_csv,
     generate_sample_roster_md,
@@ -121,7 +121,7 @@ def render_tracker_view(repo: MeetingRepository) -> None:
     depts_set: set[str] = set(org_depts)
     smart_levels_set: set[str] = set()
 
-    today_iso = datetime.date.today().isoformat()
+    today_iso = get_taiwan_today().isoformat()
     light_counts = {"🔴 紅燈": 0, "🟡 黃燈": 0, "🔵 藍燈": 0, "🟢 綠燈": 0}
 
     for m in meetings:

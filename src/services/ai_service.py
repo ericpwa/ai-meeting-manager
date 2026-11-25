@@ -27,7 +27,12 @@ from src.schemas.models import (
     RACIModel,
     SMARTGoalModel,
 )
-from src.services.governance import audit_meeting_extraction, is_vague_or_empty
+from src.services.governance import (
+    audit_meeting_extraction,
+    get_taiwan_today,
+    is_vague_or_empty,
+    parse_flexible_date,
+)
 from src.services.meeting_template_service import try_parse_structured_template_text
 
 EXTRACTION_SYSTEM_PROMPT = """你是一位精通企業治理與專案管理的「AI 會議記錄管理專家」。
@@ -127,8 +132,9 @@ def transcribe_audio(
 def _fallback_rule_based_extraction(transcript: str) -> MeetingExtractionSchema:
     """當未提供 Gemini API Key 時之離線智慧規則萃取器，確保無金鑰環境下仍能 100% 驗證 RACI/SMART/QCD+T 流程."""
     lines = [ln.strip() for ln in (transcript or "").splitlines() if ln.strip()]
-    today_iso = datetime.date.today().isoformat()
-    plus_7_iso = (datetime.date.today() + datetime.timedelta(days=7)).isoformat()
+    today_dt = get_taiwan_today()
+    today_iso = today_dt.isoformat()
+    plus_7_iso = (today_dt + datetime.timedelta(days=7)).isoformat()
 
     # 嘗試從第一行或關鍵字擷取標題
     title = "跨部門專案管理與行動方案決策會議"
@@ -177,9 +183,9 @@ def _fallback_rule_based_extraction(transcript: str) -> MeetingExtractionSchema:
             speaker_prefix = ln.split("：")[0].split(":")[0].strip() if ("：" in ln or ":" in ln) else ""
             accountable_person = "待指定 (未明確歸屬)" if has_missing_a else (speaker_prefix or attendees[0])
 
-            # 判斷日期
-            date_match = re.search(r"\d{4}-\d{2}-\d{2}", ln)
-            due_date = date_match.group(0) if date_match else ("待定" if has_missing_a else plus_7_iso)
+            # 判斷日期（相容西元、斜線、點分隔、時間戳與台灣民國年格式）
+            parsed_ln_date = parse_flexible_date(ln)
+            due_date = parsed_ln_date.isoformat() if parsed_ln_date else ("待定" if has_missing_a else plus_7_iso)
 
             task_desc = ln.split("：", 1)[-1].split(":", 1)[-1].strip()
             short_title = task_desc[:38] + ("..." if len(task_desc) > 38 else "")
