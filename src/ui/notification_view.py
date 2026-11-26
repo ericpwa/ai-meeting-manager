@@ -13,10 +13,19 @@ from __future__ import annotations
 import datetime
 import streamlit as st
 
-from src.config import get_webhook_url, mask_secret
+from src.config import (
+    get_line_channel_access_token,
+    get_line_target_id,
+    get_webhook_url,
+    is_line_messaging_configured,
+    mask_secret,
+)
 from src.repositories.meeting_repo import MeetingRepository
 from src.services.notification_service import (
+    build_line_share_url,
+    dispatch_line_messaging_push,
     dispatch_webhook_notification,
+    fetch_line_bot_quota,
     generate_channel_message,
     group_by_accountable,
     polish_reminder_with_ai,
@@ -211,7 +220,117 @@ def render_notification_view(repo: MeetingRepository) -> None:
     if wh_url:
         st.caption(f"🔗 目前已綁定外部 Webhook URL：`{mask_secret(wh_url)}`")
     else:
-        st.caption("💡 提示：可於左側邊欄「🔔 跨部門通知 Webhook BYOK 設定」填入 Slack / Teams / Discord Webhook URL，即可一鍵真實推播至企業頻道。")
+        st.caption("💡 提示：可於左側邊欄「🔔 進階：跨部門催辦 Webhook & LINE BYOK 設定」填入 Slack / Teams / Discord Webhook 或 LINE Messaging API 憑證。")
+
+    # 📱 當通道選為 LINE 時，顯示專屬「0 元開通雙軌 LINE 傳送與機器人推播工作區」
+    if channel_code == "line":
+        current_line_msg = st.session_state.get("notif_message_editor", generated_msg)
+        line_share_url = build_line_share_url(current_line_msg)
+        line_token = get_line_channel_access_token()
+        default_line_target = get_line_target_id()
+
+        with st.container(border=True):
+            st.markdown("##### 📱 LINE 精簡行動卡 0 元開通發送中心（雙軌免付費方案）")
+            st.caption(
+                "⚠️ 註：舊版 LINE Notify 已於 2025/03/31 退場。本系統全面採用 2026 官方現役雙軌方案："
+                "**① 0 元永久免費無上限「LINE 一鍵分享傳送」** 與 **② 0 元輕用量每月 200 則「LINE Messaging API 官方機器人推播」**。"
+            )
+
+            ln_c1, ln_c2 = st.columns([1.6, 2.4])
+            with ln_c1:
+                st.markdown("**🌟 方案 ①：0 元無限則數・零設定（推薦立即可用）**")
+                st.link_button(
+                    "📲 一鍵開啟 LINE 傳送至群組／個人（0 元無上限）",
+                    url=line_share_url,
+                    type="primary",
+                    width="stretch",
+                )
+                st.caption("點擊後直接開啟手機／電腦版 LINE 並自動填入行動卡，挑選同事或群組按送出即可（不管群組幾人皆 0 元）。")
+
+            with ln_c2:
+                st.markdown("**🤖 方案 ②：LINE 官方機器人自動推播（0 元每月 200 則）**")
+                line_opt1, line_opt2 = st.columns([1.4, 1.6])
+                with line_opt1:
+                    use_flex = st.checkbox(
+                        "🎨 傳送彩色 Flex 互動行動卡（推薦）",
+                        value=True,
+                        key="notif_line_use_flex",
+                        help="勾選後 LINE 會收到帶有深藍標題、紅/黃燈號與 RACI/QCD+T 結構排版的美觀彩色行動卡；取消勾選則傳送下方純文字。",
+                    )
+                with line_opt2:
+                    override_target = st.text_input(
+                        "本次推播目標 ID (留空沿用側邊欄設定)",
+                        value=default_line_target,
+                        placeholder="U... (個人) 或 C... (群組)，多筆用逗號隔開",
+                        key="notif_line_target_override",
+                        label_visibility="collapsed",
+                    )
+
+                lbtn1, lbtn2 = st.columns([1.8, 1.2])
+                with lbtn1:
+                    if st.button(
+                        "📱 發送 LINE 官方機器人推播 (Messaging API)",
+                        type="primary",
+                        key="btn_notif_dispatch_line",
+                    ):
+                        ok_ln, msg_ln = dispatch_line_messaging_push(
+                            message_text=current_line_msg,
+                            entries=target_entries,
+                            target_accountable=target_label,
+                            tone=selected_tone,
+                            use_flex_card=use_flex,
+                            target_id=override_target.strip() or default_line_target,
+                        )
+                        st.session_state["notif_dispatch_ok"] = ok_ln
+                        st.session_state["notif_dispatch_msg"] = msg_ln
+                        if "notification_dispatch_logs" not in st.session_state:
+                            st.session_state["notification_dispatch_logs"] = []
+                        st.session_state["notification_dispatch_logs"].insert(
+                            0,
+                            {
+                                "發送時間": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                                "催辦對象 (A)": target_label,
+                                "通知通道": "📱 LINE Messaging API (" + ("Flex 彩色卡" if use_flex else "純文字") + ")",
+                                "催辦語氣": selected_tone,
+                                "涵蓋任務數": len(target_entries),
+                                "發送狀態": "✅ 成功" if ok_ln else "❌ 失敗",
+                                "結果說明": msg_ln,
+                            },
+                        )
+                        st.rerun()
+
+                with lbtn2:
+                    if st.button("📊 查詢本月剩餘額度", key="btn_check_line_quota"):
+                        _, _, q_msg = fetch_line_bot_quota()
+                        st.session_state["notif_line_quota_msg"] = q_msg
+
+                if is_line_messaging_configured():
+                    st.caption(
+                        f"🟢 LINE 機器人憑證已就緒（Token：`{mask_secret(line_token)}` ｜ 預設目標：`{mask_secret(default_line_target)}`）"
+                    )
+                else:
+                    st.caption("ℹ️ 尚未設定 LINE 憑證：按推播將執行安全模擬 (Dry-Run)；可於左側邊欄填入免費官方帳號 Token 開通真實推播。")
+
+                if "notif_line_quota_msg" in st.session_state:
+                    st.info(st.session_state["notif_line_quota_msg"])
+
+            with st.expander("📋 一鍵複製純文字行動卡（點擊右上角複製圖示，直接貼到電腦版 LINE）", expanded=False):
+                st.code(current_line_msg, language=None)
+
+            with st.expander("📖 新手小白開通教學 ＆ 2026 LINE 免費／付費成本速查", expanded=False):
+                st.markdown(
+                    r"""
+                    - **最快 0 元免設定用法**：直接點擊上方 **「📲 一鍵開啟 LINE 傳送至群組／個人」**，或展開「📋 一鍵複製純文字行動卡」貼到 LINE 群組，**永久 0 元、無則數上限**！
+                    - **想開通「機器人自動直推」(0 元輕用量每月 200 則)**：
+                      1. 免費建立 LINE 官方帳號（[LINE Official Account Manager](https://manager.line.biz/)）並開啟 **Messaging API**。
+                      2. 到 [LINE Developers Console](https://developers.line.biz/console/) 複製 **Channel access token (long-lived)** 與目標 **User ID (`U...`) / Group ID (`C...`)**。
+                      3. 貼入左側邊欄「🔔 進階：跨部門催辦 Webhook & LINE BYOK 設定」即可一鍵發送彩色 Flex 行動卡！
+                    - **💡 2026/11 最新台灣 LINE 費率與省額度秘技**：
+                      - **輕用量（免費）**：**NT\$0 / 月**（每月 200 則，不可加購）。
+                      - **中用量**：**NT\$1,000 / 月**（未稅，3,000 則）；**高用量**：**NT\$1,400 / 月**（未稅，6,000 則，超量每則 NT\$0.20 起）。
+                      - **省錢鐵律**：LINE 推播至群組是以「`群組人數 × 發送次數`」扣額度；建議改用 **私訊單獨推播給「👑 最終當責者 A」**（1 人只扣 1 則，每週催 10 位主管 1 個月僅耗 40 則，**0 元免費額度綽綽有餘**！），大群組公告則用「📲 一鍵開啟 LINE 分享」完全免費！
+                    """
+                )
 
     edited_msg = st.text_area(
         "📝 催辦通知文案預覽與微調（可直接複製貼上至 Email / Slack / Teams / LINE，或點擊上方按鈕自動推播）",

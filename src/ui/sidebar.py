@@ -9,9 +9,12 @@ from src.config import (
     get_gemini_api_key,
     get_gemini_key_type_label,
     get_gemini_model,
+    get_line_channel_access_token,
+    get_line_target_id,
     get_supabase_credentials,
     get_webhook_url,
     get_workspace_passcode,
+    is_line_messaging_configured,
     is_supabase_configured,
     is_valid_gemini_key_format,
     mask_secret,
@@ -108,8 +111,8 @@ def render_sidebar(repo: MeetingRepository) -> bool:
                 st.session_state["byok_supabase_key"] = byok_supa_key.strip()
                 st.rerun()
 
-        with st.expander("🔔 進階：跨部門催辦 Webhook BYOK 設定", expanded=False):
-            st.caption("支援 Slack / Teams / Discord Incoming Webhook URL，未設定時採安全模擬推播 (Dry-run)。")
+        with st.expander("🔔 進階：跨部門催辦 Webhook & LINE BYOK 設定", expanded=False):
+            st.caption("支援 Slack / Teams / Discord Webhook，以及 **LINE Messaging API（0 元輕用量每月 200 則免費推播）**。")
             byok_wh = st.text_input(
                 "Notification Webhook URL",
                 value=st.session_state.get("byok_webhook_url", ""),
@@ -122,6 +125,34 @@ def render_sidebar(repo: MeetingRepository) -> bool:
             current_wh = get_webhook_url()
             if current_wh:
                 st.success(f"Webhook 已就緒 (`{mask_secret(current_wh)}`)")
+
+            st.markdown("---")
+            st.markdown("**📱 LINE Messaging API（0 元官方機器人推播）**")
+            st.caption("免設定亦可在 Tab 4 直接用「0 元一鍵 LINE 分享連結」無限發送；填入下方憑證即可啟用機器人全自動推播。")
+            byok_line_token = st.text_input(
+                "LINE Channel Access Token (長期權杖)",
+                value=st.session_state.get("byok_line_channel_access_token", ""),
+                type="password",
+                placeholder="貼上 LINE Developers 核發之 Channel Access Token",
+                key="input_byok_line_token",
+            )
+            if byok_line_token.strip():
+                st.session_state["byok_line_channel_access_token"] = byok_line_token.strip()
+
+            byok_line_target = st.text_input(
+                "LINE 推播目標 ID (User ID `U...` / Group ID `C...`)",
+                value=st.session_state.get("byok_line_target_id", ""),
+                placeholder="例如：U1234abcd... 或 C5678efgh... (多筆用逗號分隔)",
+                key="input_byok_line_target_id",
+            )
+            if byok_line_target.strip():
+                st.session_state["byok_line_target_id"] = byok_line_target.strip()
+
+            if is_line_messaging_configured():
+                st.success(
+                    f"LINE 機器人已就緒 (Token: `{mask_secret(get_line_channel_access_token())}` ｜ "
+                    f"目標: `{mask_secret(get_line_target_id())}`)"
+                )
 
         st.divider()
 

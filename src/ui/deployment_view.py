@@ -239,6 +239,9 @@ def render_deployment_view(repo: MeetingRepository) -> None:
             'SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."\n\n'
             '# 選填：Slack / Teams / Discord 催辦通知 Webhook\n'
             'NOTIFICATION_WEBHOOK_URL = ""\n\n'
+            '# 選填：LINE Messaging API 官方推播（0 元輕用量每月 200 則免費；未填亦可直接用 0 元無上限 LINE 一鍵分享）\n'
+            'LINE_CHANNEL_ACCESS_TOKEN = ""\n'
+            'LINE_TARGET_ID = ""\n\n'
             '# 選填：企業內部工作區通行碼（留空代表免密碼共享）\n'
             'WORKSPACE_PASSCODE = ""\n'
         )

@@ -110,6 +110,14 @@ def test_streamlit_action_item_evidence_closed_loop_and_tracker(tmp_path: Path, 
     assert len(at.exception) == 0
     assert len(at.session_state.get("notification_dispatch_logs", [])) == 1
 
+    # (d2) 驗證切換至「📱 LINE / 即時通訊精簡行動卡」後顯示 LINE 0 元發送工作區並可執行 LINE 推播
+    at.selectbox(key="notif_sel_channel").select("📱 LINE / 即時通訊精簡行動卡").run()
+    assert len(at.exception) == 0
+    assert any("LINE 精簡行動卡 0 元開通發送中心" in m.value for m in at.markdown)
+    at.button(key="btn_notif_dispatch_line").click().run()
+    assert len(at.exception) == 0
+    assert len(at.session_state.get("notification_dispatch_logs", [])) == 2
+
     # (e) 測試 Tab 5 雲端部署與系統自檢中心：點擊「立即執行系統自我查核」
     at.button(key="btn_run_live_diagnostics").click().run()
     assert len(at.exception) == 0

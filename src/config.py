@@ -179,6 +179,21 @@ def get_webhook_url() -> str:
     return get_config_value("NOTIFICATION_WEBHOOK_URL", default="", session_key="byok_webhook_url")
 
 
+def get_line_channel_access_token() -> str:
+    """取得選用之 LINE Messaging API Channel Access Token（支援 0 元輕用量每月 200 則推播，透過 .env / st.secrets / Sidebar BYOK）."""
+    return get_config_value("LINE_CHANNEL_ACCESS_TOKEN", default="", session_key="byok_line_channel_access_token")
+
+
+def get_line_target_id() -> str:
+    """取得選用之 LINE 推播目標 ID（User ID `U...` / Group ID `C...` / Room ID `R...`，支援逗號分隔多個目標）."""
+    return get_config_value("LINE_TARGET_ID", default="", session_key="byok_line_target_id")
+
+
+def is_line_messaging_configured() -> bool:
+    """檢查是否已完整設定 LINE Messaging API 推播憑證 (Token + Target ID)."""
+    return bool(get_line_channel_access_token() and get_line_target_id())
+
+
 def get_local_db_path() -> Path:
     """取得本地 SQLite 備援資料庫檔案路徑."""
     rel_path = get_config_value("LOCAL_DB_PATH", default="data/local_meetings.db")

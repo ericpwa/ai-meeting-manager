@@ -15,7 +15,8 @@ from __future__ import annotations
 
 import datetime
 import re
-from typing import Literal
+from typing import Any, Literal
+from urllib.parse import quote
 
 import httpx
 from pydantic import BaseModel, Field
@@ -25,6 +26,8 @@ from src.config import (
     get_candidate_gemini_models,
     get_gemini_api_key,
     get_gemini_model,
+    get_line_channel_access_token,
+    get_line_target_id,
     get_webhook_url,
 )
 from src.schemas.models import ActionItem, MeetingRecord
@@ -333,3 +336,331 @@ def dispatch_webhook_notification(
             return False, f"⚠️ Webhook 伺服器回傳非成功狀態碼：HTTP {resp.status_code} ({resp.text[:120]})"
     except Exception as exc:
         return False, f"❌ Webhook 推播連線異常：{exc}"
+
+
+LINE_PUSH_API_URL = "https://api.line.me/v2/bot/message/push"
+LINE_QUOTA_API_URL = "https://api.line.me/v2/bot/message/quota"
+LINE_QUOTA_CONSUMPTION_URL = "https://api.line.me/v2/bot/message/quota/consumption"
+_LINE_TARGET_ID_PATTERN = re.compile(r"^[UCR][0-9a-fA-F]{16,}$")
+
+
+def build_line_share_url(message_text: str, max_chars: int = 1400) -> str:
+    """產出 LINE 官方 0 元無上限一鍵分享連結 (`https://line.me/R/share?text=...`).
+
+    點選後會直接喚起手機／電腦版 LINE 並帶入催辦精簡行動卡，完全免申請 API 金鑰、無則數限制。
+    """
+    cleaned = (message_text or "").strip()
+    if len(cleaned) > max_chars:
+        cleaned = cleaned[: max_chars - 24].rstrip() + "\n…（完整清單請見會議系統）"
+    return f"https://line.me/R/share?text={quote(cleaned, safe='')}"
+
+
+def build_line_flex_message(
+    entries: list[FollowUpTaskEntry],
+    target_accountable: str = "全體當責人",
+    tone: str = "嚴謹稽核 (Audit)",
+) -> dict[str, Any]:
+    """建置 LINE Messaging API 官方彩色 Flex Message 精簡行動卡（單則推播即可呈現完整治理摘要）."""
+    today_iso = get_taiwan_today().isoformat()
+    overdue_n = sum(1 for e in entries if e.urgency_category == "🚨 逾期未完成")
+    blocked_n = sum(1 for e in entries if e.urgency_category == "🛑 執行受阻 (Blocked)")
+    gap_n = sum(1 for e in entries if e.urgency_category == "⚠️ 治理缺口待補齊")
+    soon_n = sum(1 for e in entries if e.urgency_category == "⏳ 3日內即將到期")
+
+    body_contents: list[dict[str, Any]] = [
+        {
+            "type": "text",
+            "text": f"對象：{target_accountable} ｜ 基準日：{today_iso}",
+            "size": "xs",
+            "color": "#475569",
+            "wrap": True,
+        },
+        {
+            "type": "box",
+            "layout": "horizontal",
+            "margin": "md",
+            "spacing": "sm",
+            "contents": [
+                {
+                    "type": "text",
+                    "text": f"🔴逾期 {overdue_n}",
+                    "size": "xs",
+                    "weight": "bold",
+                    "color": "#DC2626",
+                    "flex": 1,
+                },
+                {
+                    "type": "text",
+                    "text": f"🛑受阻 {blocked_n}",
+                    "size": "xs",
+                    "weight": "bold",
+                    "color": "#B91C1C",
+                    "flex": 1,
+                },
+                {
+                    "type": "text",
+                    "text": f"⚠️缺口 {gap_n}",
+                    "size": "xs",
+                    "weight": "bold",
+                    "color": "#D97706",
+                    "flex": 1,
+                },
+                {
+                    "type": "text",
+                    "text": f"⏳到期 {soon_n}",
+                    "size": "xs",
+                    "weight": "bold",
+                    "color": "#B45309",
+                    "flex": 1,
+                },
+            ],
+        },
+        {"type": "separator", "margin": "md"},
+    ]
+
+    if not entries:
+        body_contents.append(
+            {
+                "type": "text",
+                "text": "✅ 目前名下所有任務皆按期推進且無任何 RACI / SMART / QCD+T 治理缺口！",
+                "size": "sm",
+                "color": "#059669",
+                "margin": "md",
+                "wrap": True,
+            }
+        )
+    else:
+        for e in entries[:8]:
+            is_red = e.urgency_category in {"🚨 逾期未完成", "🛑 執行受阻 (Blocked)"}
+            badge_color = "#DC2626" if is_red else "#D97706"
+            r_str = "、".join(e.responsible) if e.responsible else "待指定"
+            body_contents.append(
+                {
+                    "type": "box",
+                    "layout": "vertical",
+                    "margin": "md",
+                    "spacing": "xs",
+                    "contents": [
+                        {
+                            "type": "text",
+                            "text": f"{e.urgency_category} [{e.action_id}]",
+                            "size": "xs",
+                            "weight": "bold",
+                            "color": badge_color,
+                            "wrap": True,
+                        },
+                        {
+                            "type": "text",
+                            "text": e.task_title[:60],
+                            "size": "sm",
+                            "weight": "bold",
+                            "color": "#0F172A",
+                            "wrap": True,
+                        },
+                        {
+                            "type": "text",
+                            "text": f"👑 A:{e.accountable} ｜ 🛠️ R:{r_str}",
+                            "size": "xs",
+                            "color": "#334155",
+                            "wrap": True,
+                        },
+                        {
+                            "type": "text",
+                            "text": f"⏰ 期限:{e.due_date} ｜ 📑 佐證T:{e.truthfulness_req or '待補定義'}",
+                            "size": "xs",
+                            "color": "#64748B",
+                            "wrap": True,
+                        },
+                    ],
+                }
+            )
+            body_contents.append({"type": "separator", "margin": "sm"})
+
+        if len(entries) > 8:
+            body_contents.append(
+                {
+                    "type": "text",
+                    "text": f"…其餘尚有 {len(entries) - 8} 項待處理任務，請登入 AI 會議管理系統檢視。",
+                    "size": "xs",
+                    "color": "#64748B",
+                    "margin": "sm",
+                    "wrap": True,
+                }
+            )
+
+    alt_text = f"🔔 會議當責催辦｜{target_accountable}（共 {len(entries)} 項：逾期 {overdue_n} / 受阻 {blocked_n} / 缺口 {gap_n}）"
+    return {
+        "type": "flex",
+        "altText": alt_text[:400],
+        "contents": {
+            "type": "bubble",
+            "size": "mega",
+            "header": {
+                "type": "box",
+                "layout": "vertical",
+                "backgroundColor": "#162238",
+                "paddingAll": "14px",
+                "contents": [
+                    {
+                        "type": "text",
+                        "text": "🛡️ AI 會議治理當責催辦行動卡",
+                        "color": "#FFFFFF",
+                        "weight": "bold",
+                        "size": "md",
+                    },
+                    {
+                        "type": "text",
+                        "text": f"INPOWER 充霸 · 語氣：{tone}",
+                        "color": "#BAE6FD",
+                        "size": "xs",
+                        "margin": "xs",
+                    },
+                ],
+            },
+            "body": {
+                "type": "box",
+                "layout": "vertical",
+                "paddingAll": "14px",
+                "contents": body_contents,
+            },
+            "footer": {
+                "type": "box",
+                "layout": "vertical",
+                "backgroundColor": "#F8FAFC",
+                "paddingAll": "10px",
+                "contents": [
+                    {
+                        "type": "text",
+                        "text": "👉 完成時請回系統填寫 T 成果佐證始可結案 (Done)",
+                        "size": "xs",
+                        "color": "#1E4E79",
+                        "weight": "bold",
+                        "align": "center",
+                        "wrap": True,
+                    }
+                ],
+            },
+        },
+    }
+
+
+def dispatch_line_messaging_push(
+    message_text: str,
+    entries: list[FollowUpTaskEntry] | None = None,
+    target_accountable: str = "全體當責人",
+    tone: str = "嚴謹稽核 (Audit)",
+    use_flex_card: bool = True,
+    channel_access_token: str | None = None,
+    target_id: str | None = None,
+) -> tuple[bool, str]:
+    """透過 LINE 官方 Messaging API (`POST /v2/bot/message/push`) 推播精簡行動卡或 Flex 彩色卡片.
+
+    支援：
+    - 0 元輕用量方案（每月免費 200 則主動推播，推薦私訊當責者 A 最省額度）
+    - 支援逗號分隔多個目標 ID（`U...` 個人 User ID、`C...` 群組 Group ID、`R...` 聊天室 Room ID）
+    - 未填入憑證時採安全模擬推播 (Dry-Run Mode)，確保零設定亦可測試稽核紀錄
+    """
+    cleaned_msg = (message_text or "").strip()
+    if not cleaned_msg:
+        return False, "❌ LINE 催辦訊息內容不可為空白。"
+
+    resolved_token = (
+        channel_access_token if channel_access_token is not None else get_line_channel_access_token()
+    ).strip()
+    resolved_target_raw = (target_id if target_id is not None else get_line_target_id()).strip()
+
+    if not resolved_token or not resolved_target_raw:
+        return (
+            True,
+            "✅ 【LINE 模擬推播成功 (Dry-Run Mode)】目前尚未設定 `LINE_CHANNEL_ACCESS_TOKEN` 或 `LINE_TARGET_ID`。"
+            "您可直接點擊上方 **「📲 一鍵開啟 LINE 傳送（0 元免費無上限）」** 立即發送，或於左側邊欄填入 LINE 官方帳號憑證啟用機器人自動推播（0 元方案每月 200 則）。",
+        )
+
+    targets = [t.strip() for t in re.split(r"[,，、;\s]+", resolved_target_raw) if t.strip()]
+    invalid_targets = [t for t in targets if not _LINE_TARGET_ID_PATTERN.match(t)]
+    if invalid_targets:
+        return (
+            False,
+            f"❌ LINE 目標 ID 格式不正確：`{', '.join(invalid_targets)}`。"
+            "請填入官方 `U` 開頭（個人 User ID）、`C` 開頭（群組 Group ID）或 `R` 開頭（聊天室 ID）之英數識別碼（非 LINE 帳號 ID）。",
+        )
+
+    if use_flex_card and entries is not None:
+        message_obj: dict[str, Any] = build_line_flex_message(
+            entries=entries,
+            target_accountable=target_accountable,
+            tone=tone,
+        )
+        mode_tag = "彩色 Flex 互動行動卡"
+    else:
+        message_obj = {"type": "text", "text": cleaned_msg[:4900]}
+        mode_tag = "精簡文字行動卡"
+
+    headers = {
+        "Authorization": f"Bearer {resolved_token}",
+        "Content-Type": "application/json",
+    }
+
+    sent_ok = 0
+    errors: list[str] = []
+    try:
+        with httpx.Client(timeout=12.0) as client:
+            for tid in targets:
+                resp = client.post(
+                    LINE_PUSH_API_URL,
+                    headers=headers,
+                    json={"to": tid, "messages": [message_obj]},
+                )
+                if 200 <= resp.status_code < 300:
+                    sent_ok += 1
+                elif resp.status_code == 401:
+                    errors.append(f"{tid[:6]}...: HTTP 401（Channel Access Token 無效或已過期，請重新核發）")
+                elif resp.status_code == 429:
+                    errors.append(f"{tid[:6]}...: HTTP 429（本月 200 則免費推播額度已達上限，請改用 0 元一鍵 LINE 分享連結或升級方案）")
+                else:
+                    errors.append(f"{tid[:6]}...: HTTP {resp.status_code} ({resp.text[:120]})")
+    except Exception as exc:
+        return False, f"❌ LINE Messaging API 連線異常：{exc}"
+
+    if sent_ok == len(targets):
+        return True, f"🚀 已透過 LINE Messaging API 成功推播「{mode_tag}」至 {sent_ok} 個目標！"
+    if sent_ok > 0:
+        return False, f"⚠️ 部分成功（{sent_ok}/{len(targets)}），失敗明細：{'；'.join(errors)}"
+    return False, f"❌ LINE 推播失敗：{'；'.join(errors)}"
+
+
+def fetch_line_bot_quota(channel_access_token: str | None = None) -> tuple[bool, dict[str, Any], str]:
+    """查詢 LINE 官方帳號本月免費／方案推播額度與已使用則數（此查詢 API 本身完全免費）."""
+    resolved_token = (
+        channel_access_token if channel_access_token is not None else get_line_channel_access_token()
+    ).strip()
+    if not resolved_token:
+        return False, {}, "ℹ️ 請先於左側邊欄填入 `LINE_CHANNEL_ACCESS_TOKEN` 才可查詢本月剩餘額度。"
+
+    headers = {"Authorization": f"Bearer {resolved_token}"}
+    try:
+        with httpx.Client(timeout=10.0) as client:
+            r_quota = client.get(LINE_QUOTA_API_URL, headers=headers)
+            r_used = client.get(LINE_QUOTA_CONSUMPTION_URL, headers=headers)
+            if r_quota.status_code != 200 or r_used.status_code != 200:
+                return (
+                    False,
+                    {},
+                    f"⚠️ 額度查詢失敗（HTTP {r_quota.status_code} / {r_used.status_code}），請確認 Channel Access Token 正確。",
+                )
+            q_data = r_quota.json()
+            u_data = r_used.json()
+            limit_val = q_data.get("value")
+            used_val = int(u_data.get("totalUsage", 0))
+            remaining = (int(limit_val) - used_val) if isinstance(limit_val, int) else None
+            info = {
+                "type": q_data.get("type", "limited"),
+                "limit": limit_val,
+                "used": used_val,
+                "remaining": remaining,
+            }
+            if remaining is not None:
+                return True, info, f"📊 本月 LINE 主動推播額度：已使用 **{used_val} / {limit_val}** 則，剩餘 **{max(remaining, 0)}** 則。"
+            return True, info, f"📊 本月 LINE 主動推播已使用 **{used_val}** 則（方案無硬性上限）。"
+    except Exception as exc:
+        return False, {}, f"❌ LINE 額度查詢連線異常：{exc}"
