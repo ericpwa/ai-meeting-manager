@@ -338,21 +338,104 @@ def dispatch_webhook_notification(
         return False, f"❌ Webhook 推播連線異常：{exc}"
 
 
+LINE_BOT_INFO_API_URL = "https://api.line.me/v2/bot/info"
 LINE_PUSH_API_URL = "https://api.line.me/v2/bot/message/push"
 LINE_QUOTA_API_URL = "https://api.line.me/v2/bot/message/quota"
 LINE_QUOTA_CONSUMPTION_URL = "https://api.line.me/v2/bot/message/quota/consumption"
 _LINE_TARGET_ID_PATTERN = re.compile(r"^[UCR][0-9a-fA-F]{16,}$")
+# LINE line.me / access.line.me (OpenResty 8KB URI 上限，含 OAuth 跳轉雙重編碼安全邊際)
+LINE_SHARE_MAX_ENCODED_LEN = 1400
 
 
-def build_line_share_url(message_text: str, max_chars: int = 1400) -> str:
-    """產出 LINE 官方 0 元無上限一鍵分享連結 (`https://line.me/R/share?text=...`).
+def _truncate_by_encoded_len(text: str, max_encoded_len: int, suffix: str = "\n…（完整清單請用一鍵複製或見系統）") -> tuple[str, bool]:
+    """依據 URL-encoded 位元組長度安全截斷文字，徹底杜絕 OpenResty `414 Request-URI Too Large`."""
+    cleaned = (text or "").strip()
+    if len(quote(cleaned, safe="")) <= max_encoded_len:
+        return cleaned, False
 
-    點選後會直接喚起手機／電腦版 LINE 並帶入催辦精簡行動卡，完全免申請 API 金鑰、無則數限制。
+    suffix_encoded_len = len(quote(suffix, safe=""))
+    budget = max(120, max_encoded_len - suffix_encoded_len)
+
+    # 逐行優先保留完整段落；若首行就超長則逐字截斷
+    out_chars: list[str] = []
+    used = 0
+    for ch in cleaned:
+        ch_len = len(quote(ch, safe=""))
+        if used + ch_len > budget:
+            break
+        out_chars.append(ch)
+        used += ch_len
+
+    shortened = "".join(out_chars).rstrip()
+    # 盡量在換行處收尾，避免截斷在句子中間
+    last_nl = shortened.rfind("\n")
+    if last_nl >= max(40, int(len(shortened) * 0.65)):
+        shortened = shortened[:last_nl].rstrip()
+    return shortened + suffix, True
+
+
+def build_line_share_payload(
+    message_text: str,
+    entries: list[FollowUpTaskEntry] | None = None,
+    target_accountable: str = "全體當責人",
+    max_encoded_len: int = LINE_SHARE_MAX_ENCODED_LEN,
+) -> tuple[str, str, bool]:
+    """產出保證不觸發 `414 Request-URI Too Large` 之 LINE 官方一鍵分享連結與預覽文本.
+
+    回傳:
+        (share_url, final_text_in_url, was_shortened)
     """
     cleaned = (message_text or "").strip()
-    if len(cleaned) > max_chars:
-        cleaned = cleaned[: max_chars - 24].rstrip() + "\n…（完整清單請見會議系統）"
-    return f"https://line.me/R/share?text={quote(cleaned, safe='')}"
+    if len(quote(cleaned, safe="")) <= max_encoded_len:
+        return f"https://line.me/R/share?text={quote(cleaned, safe='')}", cleaned, False
+
+    # 若原文經 UTF-8 URL 編碼後超出 OpenResty 安全門檻，改組裝結構化精簡摘要（維持高可讀性）
+    if entries:
+        today_iso = get_taiwan_today().isoformat()
+        overdue_n = sum(1 for e in entries if e.urgency_category == "🚨 逾期未完成")
+        blocked_n = sum(1 for e in entries if e.urgency_category == "🛑 執行受阻 (Blocked)")
+        gap_n = sum(1 for e in entries if e.urgency_category == "⚠️ 治理缺口待補齊")
+        soon_n = sum(1 for e in entries if e.urgency_category == "⏳ 3日內即將到期")
+
+        summary_lines = [
+            f"🔔【會議催辦｜{target_accountable}】{today_iso}",
+            f"共{len(entries)}項：🔴逾期{overdue_n} / 🛑受阻{blocked_n} / ⚠️缺口{gap_n} / ⏳到期{soon_n}",
+        ]
+        suffix = f"\n…（共{len(entries)}項，完整明細請見會議系統）"
+        suffix_len = len(quote(suffix, safe=""))
+        budget = max(200, max_encoded_len - suffix_len)
+
+        current_text = "\n".join(summary_lines)
+        shown = 0
+        for idx, e in enumerate(entries, start=1):
+            light = "🔴" if e.urgency_category in {"🚨 逾期未完成", "🛑 執行受阻 (Blocked)"} else "🟡"
+            title_short = (e.task_title or "待辦事項").strip()[:18]
+            line = f"{idx}.{light}[{e.action_id}]{title_short}({e.due_date})"
+            candidate = current_text + "\n" + line
+            if len(quote(candidate, safe="")) > budget:
+                break
+            current_text = candidate
+            shown += 1
+
+        if shown < len(entries):
+            final_text = current_text + suffix
+        else:
+            final_text = current_text
+        # 雙重防呆確保絕對不超過 max_encoded_len
+        final_text, _ = _truncate_by_encoded_len(final_text, max_encoded_len=max_encoded_len, suffix="…")
+        return f"https://line.me/R/share?text={quote(final_text, safe='')}", final_text, True
+
+    final_text, was_short = _truncate_by_encoded_len(cleaned, max_encoded_len=max_encoded_len)
+    return f"https://line.me/R/share?text={quote(final_text, safe='')}", final_text, was_short
+
+
+def build_line_share_url(message_text: str, max_encoded_len: int = LINE_SHARE_MAX_ENCODED_LEN) -> str:
+    """產出 LINE 官方 0 元無上限一鍵分享連結 (`https://line.me/R/share?text=...`).
+
+    嚴格依 URL-encoded 位元組上限截斷，徹底避免 `414 Request-URI Too Large (openresty)`。
+    """
+    share_url, _, _ = build_line_share_payload(message_text, max_encoded_len=max_encoded_len)
+    return share_url
 
 
 def build_line_flex_message(
@@ -434,6 +517,10 @@ def build_line_flex_message(
             is_red = e.urgency_category in {"🚨 逾期未完成", "🛑 執行受阻 (Blocked)"}
             badge_color = "#DC2626" if is_red else "#D97706"
             r_str = "、".join(e.responsible) if e.responsible else "待指定"
+            safe_title = (e.task_title or "未命名待辦事項").strip()[:60] or "未命名待辦事項"
+            safe_acc = (e.accountable or "待指定").strip() or "待指定"
+            safe_due = (e.due_date or "待定").strip() or "待定"
+            safe_t = (e.truthfulness_req or "待補定義").strip()[:80] or "待補定義"
             body_contents.append(
                 {
                     "type": "box",
@@ -443,7 +530,7 @@ def build_line_flex_message(
                     "contents": [
                         {
                             "type": "text",
-                            "text": f"{e.urgency_category} [{e.action_id}]",
+                            "text": f"{e.urgency_category} [{e.action_id or 'ACT'}]",
                             "size": "xs",
                             "weight": "bold",
                             "color": badge_color,
@@ -451,7 +538,7 @@ def build_line_flex_message(
                         },
                         {
                             "type": "text",
-                            "text": e.task_title[:60],
+                            "text": safe_title,
                             "size": "sm",
                             "weight": "bold",
                             "color": "#0F172A",
@@ -459,14 +546,14 @@ def build_line_flex_message(
                         },
                         {
                             "type": "text",
-                            "text": f"👑 A:{e.accountable} ｜ 🛠️ R:{r_str}",
+                            "text": f"👑 A:{safe_acc} ｜ 🛠️ R:{r_str}",
                             "size": "xs",
                             "color": "#334155",
                             "wrap": True,
                         },
                         {
                             "type": "text",
-                            "text": f"⏰ 期限:{e.due_date} ｜ 📑 佐證T:{e.truthfulness_req or '待補定義'}",
+                            "text": f"⏰ 期限:{safe_due} ｜ 📑 佐證T:{safe_t}",
                             "size": "xs",
                             "color": "#64748B",
                             "wrap": True,
@@ -566,8 +653,8 @@ def dispatch_line_messaging_push(
 
     resolved_token = (
         channel_access_token if channel_access_token is not None else get_line_channel_access_token()
-    ).strip()
-    resolved_target_raw = (target_id if target_id is not None else get_line_target_id()).strip()
+    ).strip().strip('"').strip("'")
+    resolved_target_raw = (target_id if target_id is not None else get_line_target_id()).strip().strip('"').strip("'")
 
     if not resolved_token or not resolved_target_raw:
         return (
@@ -576,13 +663,13 @@ def dispatch_line_messaging_push(
             "您可直接點擊上方 **「📲 一鍵開啟 LINE 傳送（0 元免費無上限）」** 立即發送，或於左側邊欄填入 LINE 官方帳號憑證啟用機器人自動推播（0 元方案每月 200 則）。",
         )
 
-    targets = [t.strip() for t in re.split(r"[,，、;\s]+", resolved_target_raw) if t.strip()]
+    targets = [t.strip().strip('"').strip("'") for t in re.split(r"[,，、;\s]+", resolved_target_raw) if t.strip()]
     invalid_targets = [t for t in targets if not _LINE_TARGET_ID_PATTERN.match(t)]
     if invalid_targets:
         return (
             False,
             f"❌ LINE 目標 ID 格式不正確：`{', '.join(invalid_targets)}`。"
-            "請填入官方 `U` 開頭（個人 User ID）、`C` 開頭（群組 Group ID）或 `R` 開頭（聊天室 ID）之英數識別碼（非 LINE 帳號 ID）。",
+            "請填入官方 `U` 開頭（個人 User ID）、`C` 開頭（群組 Group ID）或 `R` 開頭（聊天室 ID）之 33 碼英數識別碼（不是 `@xxx` LINE ID）。",
         )
 
     if use_flex_card and entries is not None:
@@ -614,9 +701,13 @@ def dispatch_line_messaging_push(
                 if 200 <= resp.status_code < 300:
                     sent_ok += 1
                 elif resp.status_code == 401:
-                    errors.append(f"{tid[:6]}...: HTTP 401（Channel Access Token 無效或已過期，請重新核發）")
+                    errors.append(f"{tid[:6]}...: HTTP 401（Channel Access Token 無效或已過期，請到 Messaging API 頁面最下方重新 Issue）")
+                elif resp.status_code == 400:
+                    errors.append(
+                        f"{tid[:6]}...: HTTP 400（請確認已先將機器人加為好友／拉進群組，且目標 ID 正確；LINE 回覆：{resp.text[:120]}）"
+                    )
                 elif resp.status_code == 429:
-                    errors.append(f"{tid[:6]}...: HTTP 429（本月 200 則免費推播額度已達上限，請改用 0 元一鍵 LINE 分享連結或升級方案）")
+                    errors.append(f"{tid[:6]}...: HTTP 429（本月 200 則免費推播額度已達上限，請改用方案 ① 0 元一鍵分享或升級方案）")
                 else:
                     errors.append(f"{tid[:6]}...: HTTP {resp.status_code} ({resp.text[:120]})")
     except Exception as exc:
@@ -630,24 +721,33 @@ def dispatch_line_messaging_push(
 
 
 def fetch_line_bot_quota(channel_access_token: str | None = None) -> tuple[bool, dict[str, Any], str]:
-    """查詢 LINE 官方帳號本月免費／方案推播額度與已使用則數（此查詢 API 本身完全免費）."""
+    """免費驗證 LINE 官方帳號機器人連線（`/v2/bot/info`）並查詢本月免費／方案推播額度與已使用則數（0 額度消耗）."""
     resolved_token = (
         channel_access_token if channel_access_token is not None else get_line_channel_access_token()
-    ).strip()
+    ).strip().strip('"').strip("'")
     if not resolved_token:
-        return False, {}, "ℹ️ 請先於左側邊欄填入 `LINE_CHANNEL_ACCESS_TOKEN` 才可查詢本月剩餘額度。"
+        return False, {}, "ℹ️ 請先於左側邊欄填入 `LINE_CHANNEL_ACCESS_TOKEN` 才可驗證機器人連線與查詢本月剩餘額度。"
 
     headers = {"Authorization": f"Bearer {resolved_token}"}
     try:
         with httpx.Client(timeout=10.0) as client:
+            r_info = client.get(LINE_BOT_INFO_API_URL, headers=headers)
             r_quota = client.get(LINE_QUOTA_API_URL, headers=headers)
             r_used = client.get(LINE_QUOTA_CONSUMPTION_URL, headers=headers)
             if r_quota.status_code != 200 or r_used.status_code != 200:
+                hint = "Token 無效或已過期，請回到 Messaging API 頁籤最底部重新 Issue 權杖" if 401 in {r_quota.status_code, r_used.status_code} else "請確認網路與 Token 設定"
                 return (
                     False,
                     {},
-                    f"⚠️ 額度查詢失敗（HTTP {r_quota.status_code} / {r_used.status_code}），請確認 Channel Access Token 正確。",
+                    f"⚠️ 驗證失敗（HTTP {r_quota.status_code} / {r_used.status_code}）：{hint}。",
                 )
+            bot_label = ""
+            if r_info.status_code == 200:
+                info_json = r_info.json()
+                b_name = info_json.get("displayName", "")
+                b_id = info_json.get("basicId", "")
+                if b_name:
+                    bot_label = f"✅ 機器人連線正常：【**{b_name}**】(`{b_id}`) ｜ "
             q_data = r_quota.json()
             u_data = r_used.json()
             limit_val = q_data.get("value")
@@ -660,7 +760,7 @@ def fetch_line_bot_quota(channel_access_token: str | None = None) -> tuple[bool,
                 "remaining": remaining,
             }
             if remaining is not None:
-                return True, info, f"📊 本月 LINE 主動推播額度：已使用 **{used_val} / {limit_val}** 則，剩餘 **{max(remaining, 0)}** 則。"
-            return True, info, f"📊 本月 LINE 主動推播已使用 **{used_val}** 則（方案無硬性上限）。"
+                return True, info, f"{bot_label}📊 本月 LINE 主動推播額度：已使用 **{used_val} / {limit_val}** 則，剩餘 **{max(remaining, 0)}** 則。"
+            return True, info, f"{bot_label}📊 本月 LINE 主動推播已使用 **{used_val}** 則（方案無硬性上限）。"
     except Exception as exc:
-        return False, {}, f"❌ LINE 額度查詢連線異常：{exc}"
+        return False, {}, f"❌ LINE 連線與額度查詢異常：{exc}"

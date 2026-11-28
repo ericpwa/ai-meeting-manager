@@ -22,7 +22,7 @@ from src.config import (
 )
 from src.repositories.meeting_repo import MeetingRepository
 from src.services.notification_service import (
-    build_line_share_url,
+    build_line_share_payload,
     dispatch_line_messaging_push,
     dispatch_webhook_notification,
     fetch_line_bot_quota,
@@ -225,7 +225,11 @@ def render_notification_view(repo: MeetingRepository) -> None:
     # 📱 當通道選為 LINE 時，顯示專屬「0 元開通雙軌 LINE 傳送與機器人推播工作區」
     if channel_code == "line":
         current_line_msg = st.session_state.get("notif_message_editor", generated_msg)
-        line_share_url = build_line_share_url(current_line_msg)
+        line_share_url, _, share_was_shortened = build_line_share_payload(
+            current_line_msg,
+            entries=target_entries,
+            target_accountable=target_label,
+        )
         line_token = get_line_channel_access_token()
         default_line_target = get_line_target_id()
 
@@ -245,7 +249,13 @@ def render_notification_view(repo: MeetingRepository) -> None:
                     type="primary",
                     width="stretch",
                 )
-                st.caption("點擊後直接開啟手機／電腦版 LINE 並自動填入行動卡，挑選同事或群組按送出即可（不管群組幾人皆 0 元）。")
+                if share_was_shortened:
+                    st.caption(
+                        "🛡️ 系統已自動將網址內容濃縮為 **LINE 伺服器安全長度摘要版**（徹底杜絕 `414` 錯誤）；"
+                        "若需傳送完整長版明細，請直接點擊下方 **「📋 一鍵複製完整行動卡」** 貼到 LINE，或使用右側 **方案 ② 機器人推播**！"
+                    )
+                else:
+                    st.caption("點擊後直接開啟手機／電腦版 LINE 並自動填入行動卡，挑選同事或群組按送出即可（不管群組幾人皆 0 元）。")
 
             with ln_c2:
                 st.markdown("**🤖 方案 ②：LINE 官方機器人自動推播（0 元每月 200 則）**")
@@ -266,7 +276,9 @@ def render_notification_view(repo: MeetingRepository) -> None:
                         label_visibility="collapsed",
                     )
 
-                lbtn1, lbtn2 = st.columns([1.8, 1.2])
+                effective_target = override_target.strip() or default_line_target
+
+                lbtn1, lbtn2 = st.columns([1.7, 1.3])
                 with lbtn1:
                     if st.button(
                         "📱 發送 LINE 官方機器人推播 (Messaging API)",
@@ -279,7 +291,7 @@ def render_notification_view(repo: MeetingRepository) -> None:
                             target_accountable=target_label,
                             tone=selected_tone,
                             use_flex_card=use_flex,
-                            target_id=override_target.strip() or default_line_target,
+                            target_id=effective_target,
                         )
                         st.session_state["notif_dispatch_ok"] = ok_ln
                         st.session_state["notif_dispatch_msg"] = msg_ln
@@ -300,13 +312,17 @@ def render_notification_view(repo: MeetingRepository) -> None:
                         st.rerun()
 
                 with lbtn2:
-                    if st.button("📊 查詢本月剩餘額度", key="btn_check_line_quota"):
+                    if st.button("🔍 驗證連線與剩餘額度", key="btn_check_line_quota"):
                         _, _, q_msg = fetch_line_bot_quota()
                         st.session_state["notif_line_quota_msg"] = q_msg
 
-                if is_line_messaging_configured():
+                if line_token and effective_target:
                     st.caption(
-                        f"🟢 LINE 機器人憑證已就緒（Token：`{mask_secret(line_token)}` ｜ 預設目標：`{mask_secret(default_line_target)}`）"
+                        f"🟢 LINE 機器人憑證已就緒（Token：`{mask_secret(line_token)}` ｜ 目標：`{mask_secret(effective_target)}`）"
+                    )
+                elif line_token:
+                    st.caption(
+                        f"🟡 已填入 Token (`{mask_secret(line_token)}`)，請於上方格子或側邊欄再填入目標 ID (`U...` 或 `C...`) 即可發送！"
                     )
                 else:
                     st.caption("ℹ️ 尚未設定 LINE 憑證：按推播將執行安全模擬 (Dry-Run)；可於左側邊欄填入免費官方帳號 Token 開通真實推播。")
@@ -314,7 +330,10 @@ def render_notification_view(repo: MeetingRepository) -> None:
                 if "notif_line_quota_msg" in st.session_state:
                     st.info(st.session_state["notif_line_quota_msg"])
 
-            with st.expander("📋 一鍵複製純文字行動卡（點擊右上角複製圖示，直接貼到電腦版 LINE）", expanded=False):
+            with st.expander(
+                "📋 一鍵複製完整純文字行動卡（不受網址長度限制，點擊右上角複製圖示直接貼到 LINE）",
+                expanded=share_was_shortened,
+            ):
                 st.code(current_line_msg, language=None)
 
             with st.expander("📖 新手小白開通教學 ＆ 2026 LINE 免費／付費成本速查", expanded=False):

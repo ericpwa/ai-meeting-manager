@@ -4,10 +4,13 @@ from __future__ import annotations
 
 from src.repositories.meeting_repo import get_sample_meetings
 from src.services.notification_service import (
+    LINE_SHARE_MAX_ENCODED_LEN,
     build_line_flex_message,
+    build_line_share_payload,
     build_line_share_url,
     dispatch_line_messaging_push,
     dispatch_webhook_notification,
+    fetch_line_bot_quota,
     generate_channel_message,
     group_by_accountable,
     polish_reminder_with_ai,
@@ -74,16 +77,39 @@ def test_line_zero_cost_share_flex_and_messaging_api(monkeypatch) -> None:
     entries = scan_followup_targets(meetings)
     line_msg = generate_channel_message(entries, channel="line", tone="溫和提醒 (Friendly)")
 
-    # 1. 驗證 0 元無上限 LINE 一鍵分享 URL
+    # 1. 驗證 0 元無上限 LINE 一鍵分享 URL（含超長中文+Emoji 嚴格防 414 Request-URI Too Large 測試）
     share_url = build_line_share_url(line_msg)
     assert share_url.startswith("https://line.me/R/share?text=")
-    assert len(share_url) > 40
+    assert len(share_url) <= len("https://line.me/R/share?text=") + LINE_SHARE_MAX_ENCODED_LEN
 
-    # 2. 驗證 LINE Flex Message 彩色行動卡結構完整
+    huge_chinese_msg = ("🔔【會議當責催辦】逾期任務非常長的中文字串測試內容🚨\n" * 120)
+    safe_url, safe_preview, was_short = build_line_share_payload(
+        huge_chinese_msg,
+        entries=entries,
+        target_accountable="管理部",
+    )
+    assert was_short is True
+    assert safe_url.startswith("https://line.me/R/share?text=")
+    assert len(safe_url) <= len("https://line.me/R/share?text=") + LINE_SHARE_MAX_ENCODED_LEN
+    assert "管理部" in safe_preview
+
+    # 2. 驗證 LINE Flex Message 彩色行動卡結構完整（所有 text 欄位皆不可為空字串）
     flex_obj = build_line_flex_message(entries, target_accountable="管理部", tone="溫和提醒 (Friendly)")
     assert flex_obj["type"] == "flex"
     assert flex_obj["contents"]["type"] == "bubble"
     assert "管理部" in flex_obj["altText"]
+
+    def _assert_no_empty_flex_text(node: object) -> None:
+        if isinstance(node, dict):
+            if node.get("type") == "text":
+                assert str(node.get("text", "")).strip() != "", f"Flex text 不可為空：{node}"
+            for v in node.values():
+                _assert_no_empty_flex_text(v)
+        elif isinstance(node, list):
+            for item in node:
+                _assert_no_empty_flex_text(item)
+
+    _assert_no_empty_flex_text(flex_obj)
 
     # 3. 空訊息攔截
     ok_empty, _ = dispatch_line_messaging_push("", channel_access_token="", target_id="")
@@ -148,3 +174,38 @@ def test_line_zero_cost_share_flex_and_messaging_api(monkeypatch) -> None:
     assert captured_payloads[0]["url"] == "https://api.line.me/v2/bot/message/push"
     assert captured_payloads[0]["json"]["to"] == "U1234567890abcdef1234567890abcdef"
     assert captured_payloads[0]["json"]["messages"][0]["type"] == "flex"
+
+    # 7. 模擬驗證 LINE 機器人連線與剩餘額度查詢 (/v2/bot/info + /quota + /consumption)
+    class _FakeGetResp:
+        def __init__(self, payload: dict) -> None:
+            self.status_code = 200
+            self._payload = payload
+
+        def json(self) -> dict:
+            return self._payload
+
+    class _FakeQuotaClient:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args) -> None:
+            pass
+
+        def get(self, url: str, headers: dict):
+            if url.endswith("/bot/info"):
+                return _FakeGetResp({"displayName": "充霸 AI 會議小幫手", "basicId": "@inpower"})
+            if url.endswith("/quota"):
+                return _FakeGetResp({"type": "limited", "value": 200})
+            return _FakeGetResp({"totalUsage": 12})
+
+    monkeypatch.setattr(notif_mod.httpx, "Client", _FakeQuotaClient)
+    ok_q, q_info, q_msg = fetch_line_bot_quota(channel_access_token="dummy_channel_token_for_test")
+    assert ok_q is True
+    assert q_info["limit"] == 200
+    assert q_info["used"] == 12
+    assert q_info["remaining"] == 188
+    assert "充霸 AI 會議小幫手" in q_msg
+    assert "188" in q_msg
